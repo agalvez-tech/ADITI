@@ -100,15 +100,25 @@ export default function App() {
   const toastTimer = useRef(null);
 
   useEffect(() => {
-    Promise.all([
-      getData('students'), getData('bookings'), getData('purchases'), getData('wallPosts')
-    ]).then(([s, b, p, w]) => {
-      setStudents(s || []);
-      setBookings(b || []);
-      setPurchases(p || []);
-      setWallPosts(w || []);
-      setLoading(false);
-    }).catch(() => setLoading(false));
+    let cancelled = false;
+    function loadAll() {
+      return Promise.all([
+        getData('students'), getData('bookings'), getData('purchases'), getData('wallPosts')
+      ]).then(([s, b, p, w]) => {
+        if (cancelled) return;
+        setStudents(s || []);
+        setBookings(b || []);
+        setPurchases(p || []);
+        setWallPosts(w || []);
+        setLoading(false);
+      }).catch(() => { if (!cancelled) setLoading(false); });
+    }
+    loadAll();
+    const interval = setInterval(loadAll, 5000);
+    function onFocus() { loadAll(); }
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) loadAll(); });
+    return () => { cancelled = true; clearInterval(interval); window.removeEventListener('focus', onFocus); };
   }, []);
 
   function toast(msg) {
