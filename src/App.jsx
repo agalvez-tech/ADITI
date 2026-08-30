@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import * as XLSX from 'xlsx';
 import { getData, setData } from './api.js';
 import { payWithRedsys } from './redsys.js';
 
@@ -63,7 +64,7 @@ const BONOS = [
 const CLASE_SUELTA_PRECIO = 20;
 const BIZUM_PHONE = '691750534';
 const ADMIN_PIN = 'ADITI2026';
-const HOW_FOUND = ['Instagram', 'Facebook', 'Google', 'Recomendación de una amiga', 'Cartel o flyer', 'Web aditifunctionalyoga.es', 'Otro'];
+const HOW_FOUND = ['Instagram', 'Facebook', 'Google', 'Recomendación de una amiga', 'Al pasar por el centro', 'Cartel o flyer', 'Web aditifunctionalyoga.es', 'Otro'];
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 function todayDayName() {
@@ -168,7 +169,7 @@ export default function App() {
             isAdmin={isAdmin} setIsAdmin={setIsAdmin} setTab={setTab} toast={toast} />
         ) : tab === 'admin' ? (
           <AdminTab adminTab={adminTab} setAdminTab={setAdminTab}
-            students={students} bookings={bookings} purchases={purchases} wallPosts={wallPosts}
+            students={students} saveStudents={saveStudents} bookings={bookings} purchases={purchases} wallPosts={wallPosts}
             activePurchaseFor={activePurchaseFor}
             savePurchases={savePurchases} saveBookings={saveBookings} saveWallPosts={saveWallPosts}
             toast={toast} />
@@ -426,11 +427,12 @@ function PerfilTab({ me, students, saveStudents, pickProfile, clearProfile, isAd
 }
 
 /* ---------------- ADMIN ---------------- */
-function AdminTab({ adminTab, setAdminTab, students, bookings, purchases, wallPosts, activePurchaseFor, savePurchases, saveBookings, saveWallPosts, toast }) {
+function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, activePurchaseFor, savePurchases, saveBookings, saveWallPosts, toast }) {
   const tabs = [
     { id: 'alumnas', label: 'Alumnas' },
     { id: 'bonospend', label: 'Bonos pendientes' },
-    { id: 'muro', label: 'Publicar en el muro' }
+    { id: 'muro', label: 'Publicar en el muro' },
+    { id: 'importar', label: 'Importar alumnas' }
   ];
   return (
     <>
@@ -452,6 +454,7 @@ function AdminTab({ adminTab, setAdminTab, students, bookings, purchases, wallPo
               <div className="row" style={{ marginTop: 8 }}>
                 <span className={`pill ${active ? 'pill-sage' : 'pill-gray'}`}>{active ? `${bonoName(active.bonoId)} activo` : 'Sin bono activo'}</span>
                 <span className="pill pill-lav">{total} reservas totales</span>
+                {typeof s.legacyReservas === 'number' && <span className="pill pill-gray">{s.legacyReservas} históricas (app anterior)</span>}
               </div>
             </div>
           );
@@ -495,6 +498,7 @@ function AdminTab({ adminTab, setAdminTab, students, bookings, purchases, wallPo
         </>
       )}
       {adminTab === 'muro' && <AdminMuro wallPosts={wallPosts} saveWallPosts={saveWallPosts} toast={toast} />}
+      {adminTab === 'importar' && <AdminImport students={students} saveStudents={saveStudents} toast={toast} />}
     </>
   );
 }
@@ -718,5 +722,140 @@ function BonoModal({ modal, me, purchases, savePurchases, toast, onClose }) {
         }}>Pagar por Bizum al {BIZUM_PHONE}</button>
       </div>
     </div>
+  );
+}
+
+/* ---------------- IMPORTAR ALUMNAS (Excel) ---------------- */
+const HOWFOUND_IMPORT_MAP = {
+  'Recomendación': 'Recomendación de una amiga',
+  'Recomendacion': 'Recomendación de una amiga',
+  'Al pasar por el centro': 'Al pasar por el centro',
+  'Otro': 'Otro',
+  'Google': 'Google',
+  'Instagram': 'Instagram',
+  'Facebook': 'Facebook'
+};
+
+function excelDateToIso(value) {
+  if (!value) return '';
+  if (value instanceof Date) return isoDate(value);
+  const s = String(value).trim();
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  return '';
+}
+
+function excelCreatedToIso(value) {
+  if (!value) return new Date().toISOString();
+  if (value instanceof Date) return value.toISOString();
+  const s = String(value).trim();
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) return new Date(`${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`).toISOString();
+  return new Date().toISOString();
+}
+
+function looksLikeTestRow(nombre, apellidos) {
+  const s = `${nombre} ${apellidos}`.toLowerCase();
+  return s.includes('prueba') || s.includes('test');
+}
+
+function AdminImport({ students, saveStudents, toast }) {
+  const [rows, setRows] = useState(null);
+  const [fileName, setFileName] = useState('');
+  const fileInputRef = useRef(null);
+
+  function handleFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const wb = XLSX.read(evt.target.result, { type: 'array', cellDates: true });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+        const existingPhones = new Set(students.map(s => String(s.phone).replace(/\s/g, '')));
+        const parsed = json.map((row, i) => {
+          const nombre = String(row['Nombre'] || '').trim();
+          const apellidos = String(row['Apellidos'] || '').trim();
+          const phoneRaw = String(row['Teléfono'] || '').trim();
+          const isTest = looksLikeTestRow(nombre, apellidos);
+          const isDuplicate = phoneRaw && existingPhones.has(phoneRaw.replace(/\s/g, ''));
+          const howFoundRaw = String(row['¿Cómo nos has conocido?'] || '').trim();
+          const legacyReservas = Number(row['Reservas finalizadas']) || 0;
+          return {
+            key: i,
+            name: `${nombre} ${apellidos}`.trim(),
+            email: String(row['Correo'] || '').trim(),
+            phone: phoneRaw,
+            birthday: excelDateToIso(row['Fecha de Nacimiento']),
+            howFound: HOWFOUND_IMPORT_MAP[howFoundRaw] || howFoundRaw,
+            createdAt: excelCreatedToIso(row['Creado el']),
+            legacyReservas,
+            isTest,
+            isDuplicate,
+            selected: !isTest && !isDuplicate
+          };
+        });
+        setRows(parsed);
+      } catch (err) {
+        toast('No se pudo leer el archivo. ¿Es un Excel válido?');
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  function toggleRow(key) {
+    setRows(rows.map(r => r.key === key ? { ...r, selected: !r.selected } : r));
+  }
+
+  function handleImport() {
+    const toImport = rows.filter(r => r.selected);
+    if (toImport.length === 0) { toast('No hay ninguna fila seleccionada'); return; }
+    const newStudents = toImport.map(r => ({
+      id: uid(), name: r.name, email: r.email, phone: r.phone, birthday: r.birthday,
+      howFound: r.howFound, legacyReservas: r.legacyReservas, createdAt: r.createdAt
+    }));
+    saveStudents([...students, ...newStudents]);
+    toast(`${newStudents.length} alumnas importadas`);
+    setRows(null);
+    setFileName('');
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  const selectedCount = rows ? rows.filter(r => r.selected).length : 0;
+
+  return (
+    <>
+      <div className="card">
+        <h3>Importar alumnas desde Excel</h3>
+        <p className="muted">Sube el archivo exportado de tu app anterior (mismas columnas: Nombre, Apellidos, Teléfono, Correo, Fecha de Nacimiento, ¿Cómo nos has conocido?...). Solo se importan nombre, email, teléfono, cumpleaños y cómo os conoció — el resto de columnas no se usan.</p>
+        <input type="file" accept=".xlsx,.xls" ref={fileInputRef} onChange={handleFile} style={{ marginTop: 10 }} />
+      </div>
+
+      {rows && (
+        <>
+          <div className="sectionlabel">{fileName} · {rows.length} filas encontradas · {selectedCount} seleccionadas</div>
+          {rows.map(r => (
+            <div key={r.key} className="card" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, opacity: r.selected ? 1 : 0.5 }}>
+              <input type="checkbox" checked={r.selected} onChange={() => toggleRow(r.key)} style={{ width: 'auto', marginTop: 3 }} />
+              <div style={{ flex: 1 }}>
+                <h3>{r.name || '(sin nombre)'}</h3>
+                <p className="muted">{r.phone} · {r.email || 'sin email'}</p>
+                <p className="muted">Cumpleaños: {r.birthday || '—'} · Conoció por: {r.howFound || '—'}</p>
+                <div className="row" style={{ marginTop: 6 }}>
+                  {r.isTest && <span className="pill pill-danger">Parece de prueba</span>}
+                  {r.isDuplicate && <span className="pill pill-peach">Ya existe (mismo teléfono)</span>}
+                  {r.legacyReservas > 0 && <span className="pill pill-gray">{r.legacyReservas} reservas históricas</span>}
+                </div>
+              </div>
+            </div>
+          ))}
+          <button className="btn btn-primary" style={{ marginTop: 10, marginBottom: 20 }} onClick={handleImport}>
+            Importar {selectedCount} alumnas seleccionadas
+          </button>
+        </>
+      )}
+    </>
   );
 }
