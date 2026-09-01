@@ -80,7 +80,30 @@ con las tarjetas de prueba que te facilite el banco, y confirma con tu
 banco cómo acceder a esas tarjetas de test — sin probarlo en sandbox no
 sabremos si algo falla en el cobro real.
 
-## Cosas a tener en cuenta (`ADITI2026`) está escrito en `src/App.jsx`
+## 6. Notificaciones push (avisos del Muro)
+
+Cuando Beatriz publica algo en el Muro, cada alumna que haya activado las
+notificaciones recibe un aviso en el móvil al momento, como una app normal
+(funciona en Android sin más; en iPhone hace falta que la alumna haya
+añadido la app a la pantalla de inicio primero, es una limitación de Apple).
+
+Variables de entorno necesarias (ya generadas, solo hay que copiarlas a
+Vercel — no hace falta crear ninguna cuenta externa para esto):
+
+- `VAPID_PUBLIC_KEY`
+- `VAPID_PRIVATE_KEY`
+- `VAPID_SUBJECT` — un email de contacto, ya puesto por defecto.
+
+Las claves están en `.env.example`. La clave pública también está
+incrustada en `src/push.js` (no es secreta, así debe ser). **Si alguna
+vez las regeneras, cámbialas en los dos sitios.**
+
+Cada alumna activa las notificaciones ella misma desde Perfil → "Activar".
+El navegador le pedirá permiso; si lo acepta, su dispositivo queda
+suscrito. No hace falta perfil creado para activarlas.
+
+## Cosas a tener en cuenta
+ (`ADITI2026`) está escrito en `src/App.jsx`
   (constante `ADMIN_PIN`). Cámbialo antes de compartir la app y avisa a
   Beatriz del nuevo PIN. No es una autenticación segura de verdad, es un
   filtro sencillo — suficiente para uso interno, no para proteger datos

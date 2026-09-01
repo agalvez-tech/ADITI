@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import { getData, setData } from './api.js';
 import { payWithRedsys } from './redsys.js';
+import { registerServiceWorker, subscribeToPush, unsubscribeFromPush, getCurrentSubscription, pushSupported } from './push.js';
 
 const DAYS_ORDER = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Domingo'];
 const DAY_INDEX = { Domingo: 0, Lunes: 1, Martes: 2, 'Miércoles': 3, Jueves: 4, Viernes: 5 };
@@ -99,6 +100,10 @@ export default function App() {
   const [toastMsg, setToastMsg] = useState(null);
   const [modal, setModal] = useState(null);
   const toastTimer = useRef(null);
+
+  useEffect(() => {
+    registerServiceWorker();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -361,6 +366,51 @@ function ProfileForm({ existing, onSave }) {
   );
 }
 
+function NotificationsCard({ studentId, toast }) {
+  const [supported, setSupported] = useState(true);
+  const [subscribed, setSubscribed] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setSupported(pushSupported());
+    if (pushSupported()) {
+      getCurrentSubscription().then(sub => setSubscribed(!!sub));
+    }
+  }, []);
+
+  if (!supported) return null;
+
+  async function handleToggle() {
+    setBusy(true);
+    try {
+      if (subscribed) {
+        await unsubscribeFromPush();
+        setSubscribed(false);
+        toast('Notificaciones desactivadas');
+      } else {
+        await subscribeToPush(studentId);
+        setSubscribed(true);
+        toast('¡Notificaciones activadas!');
+      }
+    } catch (e) {
+      toast(e.message || 'No se pudieron activar las notificaciones');
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+      <div>
+        <h3>Notificaciones</h3>
+        <p className="muted">Recibe un aviso en el móvil cada vez que Beatriz publique algo en el Muro.</p>
+      </div>
+      <button className={`btn btn-sm ${subscribed ? 'btn-outline' : 'btn-sage'}`} disabled={busy} onClick={handleToggle}>
+        {subscribed ? 'Desactivar' : 'Activar'}
+      </button>
+    </div>
+  );
+}
+
 function PerfilTab({ me, students, saveStudents, pickProfile, clearProfile, isAdmin, setIsAdmin, setTab, toast }) {
   const [searchPhone, setSearchPhone] = useState('');
 
@@ -386,6 +436,7 @@ function PerfilTab({ me, students, saveStudents, pickProfile, clearProfile, isAd
 
   return (
     <>
+      <NotificationsCard studentId={me ? me.id : null} toast={toast} />
       {me ? (
         <>
           <div className="card">
@@ -517,7 +568,12 @@ function AdminMuro({ wallPosts, saveWallPosts, toast }) {
           if (!title.trim() || !content.trim()) { toast('Escribe un título y un mensaje'); return; }
           saveWallPosts([...wallPosts, { id: uid(), title: title.trim(), content: content.trim(), date: new Date().toISOString() }]);
           setTitle(''); setContent('');
-          toast('Publicado en el muro');
+          toast('Publicado en el muro, avisando a las alumnas…');
+          fetch('/api/notify-wall', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title: title.trim(), body: content.trim() })
+          }).catch(() => {});
         }}>Publicar en el muro</button>
       </div>
       <div className="sectionlabel">Publicaciones</div>
