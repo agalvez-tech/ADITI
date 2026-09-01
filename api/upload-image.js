@@ -23,7 +23,8 @@ export default async function handler(req, res) {
     const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
     const blob = await put(`muro/${Date.now()}-${safeName}`, buffer, {
       access: 'public',
-      contentType
+      contentType,
+      storeId: process.env.ADITIOK_STORE_ID || process.env.BLOB_STORE_ID
     });
 
     return res.status(200).json({ url: blob.url });
