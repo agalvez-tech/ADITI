@@ -102,7 +102,24 @@ Cada alumna activa las notificaciones ella misma desde Perfil → "Activar".
 El navegador le pedirá permiso; si lo acepta, su dispositivo queda
 suscrito. No hace falta perfil creado para activarlas.
 
+## 7. Fotos en el Muro
+
+Beatriz puede añadir una foto opcional a cada publicación del muro. Las
+imágenes se guardan en **Vercel Blob** (no en Redis, para que la base de
+datos no se llene de fotos y todo siga yendo rápido).
+
+Para activarlo:
+
+1. En tu proyecto de Vercel, ve a la pestaña **Storage** → **Create Database** → **Blob**.
+2. Vincúlalo a este proyecto. Vercel añade automáticamente la variable de
+   entorno `BLOB_READ_WRITE_TOKEN` — no hace falta que la copies a mano.
+3. Haz un redeploy si Vercel no lo hace solo tras vincular el Blob store.
+
+La app redimensiona la foto en el móvil antes de subirla (máximo 1600px,
+comprimida) para que no pese demasiado ni tarde en subir con datos móviles.
+
 ## Cosas a tener en cuenta
+
  (`ADITI2026`) está escrito en `src/App.jsx`
   (constante `ADMIN_PIN`). Cámbialo antes de compartir la app y avisa a
   Beatriz del nuevo PIN. No es una autenticación segura de verdad, es un

@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx';
 import { getData, setData } from './api.js';
 import { payWithRedsys } from './redsys.js';
 import { registerServiceWorker, subscribeToPush, unsubscribeFromPush, getCurrentSubscription, pushSupported } from './push.js';
+import { uploadWallImage } from './upload.js';
 
 const DAYS_ORDER = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Domingo'];
 const DAY_INDEX = { Domingo: 0, Lunes: 1, Martes: 2, 'Miércoles': 3, Jueves: 4, Viernes: 5 };
@@ -259,6 +260,7 @@ function MuroTab({ wallPosts }) {
     <div className="card postcard" key={p.id}>
       <div className="postdate">{fmtDate(new Date(p.date))}</div>
       <h3>{p.title}</h3>
+      {p.imageUrl && <img src={p.imageUrl} alt="" className="postimg" />}
       <p>{p.content}</p>
     </div>
   ));
@@ -557,6 +559,30 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
 function AdminMuro({ wallPosts, saveWallPosts, toast }) {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
+  const [imageUrl, setImageUrl] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [uploading, setUploading] = useState(false);
+
+  async function handleImagePick(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setImagePreview(URL.createObjectURL(file));
+    setUploading(true);
+    try {
+      const url = await uploadWallImage(file);
+      setImageUrl(url);
+    } catch (err) {
+      toast(err.message || 'No se pudo subir la imagen');
+      setImagePreview(null);
+    }
+    setUploading(false);
+  }
+
+  function removeImage() {
+    setImageUrl(null);
+    setImagePreview(null);
+  }
+
   return (
     <>
       <div className="card">
@@ -564,10 +590,20 @@ function AdminMuro({ wallPosts, saveWallPosts, toast }) {
         <input type="text" value={title} onChange={e => setTitle(e.target.value)} placeholder="Ej. Clase especial de luna llena" />
         <label>Mensaje</label>
         <textarea value={content} onChange={e => setContent(e.target.value)} placeholder="Escribe el aviso para todas las alumnas" />
-        <button className="btn btn-primary" style={{ marginTop: 14 }} onClick={() => {
+        <label>Foto (opcional)</label>
+        {imagePreview ? (
+          <div style={{ position: 'relative', marginTop: 6 }}>
+            <img src={imagePreview} alt="" className="postimg" style={{ opacity: uploading ? 0.5 : 1 }} />
+            {uploading && <div className="muted" style={{ marginTop: 6 }}>Subiendo imagen…</div>}
+            {!uploading && <button className="linklike" style={{ color: 'var(--danger)', marginTop: 6 }} onClick={removeImage}>Quitar foto</button>}
+          </div>
+        ) : (
+          <input type="file" accept="image/*" onChange={handleImagePick} />
+        )}
+        <button className="btn btn-primary" style={{ marginTop: 14 }} disabled={uploading} onClick={() => {
           if (!title.trim() || !content.trim()) { toast('Escribe un título y un mensaje'); return; }
-          saveWallPosts([...wallPosts, { id: uid(), title: title.trim(), content: content.trim(), date: new Date().toISOString() }]);
-          setTitle(''); setContent('');
+          saveWallPosts([...wallPosts, { id: uid(), title: title.trim(), content: content.trim(), imageUrl: imageUrl || null, date: new Date().toISOString() }]);
+          setTitle(''); setContent(''); setImageUrl(null); setImagePreview(null);
           toast('Publicado en el muro, avisando a las alumnas…');
           fetch('/api/notify-wall', {
             method: 'POST',
@@ -580,7 +616,9 @@ function AdminMuro({ wallPosts, saveWallPosts, toast }) {
       {[...wallPosts].sort((a, b) => new Date(b.date) - new Date(a.date)).map(p => (
         <div className="card postcard" key={p.id}>
           <div className="postdate">{fmtDate(new Date(p.date))}</div>
-          <h3>{p.title}</h3><p>{p.content}</p>
+          <h3>{p.title}</h3>
+          {p.imageUrl && <img src={p.imageUrl} alt="" className="postimg" />}
+          <p>{p.content}</p>
           <button className="linklike" style={{ color: 'var(--danger)', marginTop: 8 }}
             onClick={() => saveWallPosts(wallPosts.filter(x => x.id !== p.id))}>Eliminar</button>
         </div>
