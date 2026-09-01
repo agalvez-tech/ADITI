@@ -29,6 +29,6 @@ export default async function handler(req, res) {
     return res.status(200).json({ url: blob.url });
   } catch (e) {
     console.error('Error subiendo imagen', e);
-    return res.status(500).json({ error: 'No se pudo subir la imagen' });
+    return res.status(500).json({ error: 'No se pudo subir la imagen', detail: e.message });
   }
 }

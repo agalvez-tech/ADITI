@@ -32,7 +32,7 @@ export async function uploadWallImage(file) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || 'No se pudo subir la imagen');
+    throw new Error(err.detail || err.error || 'No se pudo subir la imagen');
   }
   const data = await res.json();
   return data.url;
