@@ -2,17 +2,24 @@ import { decodeMerchantParameters, signParameters, base64UrlToBase64 } from './_
 import { confirmPaymentFromParams } from './_confirmPurchase.js';
 
 // Redsys redirige aquí el navegador de la alumna al terminar el pago (éxito o fallo),
-// enviando por POST los mismos Ds_MerchantParameters/Ds_Signature que al webhook de notificación.
+// enviando los mismos Ds_MerchantParameters/Ds_Signature que al webhook de notificación
+// (por GET en query string o por POST, según configuración del comercio).
 // Confirmamos el bono/clase en este mismo paso para no depender de que el aviso
 // servidor-a-servidor (redsys-notify) llegue.
 export default async function handler(req, res) {
-  const { Ds_MerchantParameters, Ds_Signature } = req.body || {};
+  // Según la configuración del comercio, Redsys devuelve el navegador a esta URL
+  // por POST (parámetros en el body) o por GET (parámetros en la query string).
+  // Ya hemos visto en producción que en este caso usa GET, así que aceptamos ambos.
+  const bodyParams = req.body || {};
+  const source = bodyParams.Ds_MerchantParameters ? bodyParams : (req.query || {});
+  const { Ds_MerchantParameters, Ds_Signature } = source;
 
   if (!Ds_MerchantParameters || !Ds_Signature) {
     console.error('redsys-return: faltan Ds_MerchantParameters/Ds_Signature', {
       method: req.method,
       contentType: req.headers['content-type'],
-      bodyKeys: req.body ? Object.keys(req.body) : null
+      bodyKeys: req.body ? Object.keys(req.body) : null,
+      queryKeys: req.query ? Object.keys(req.query) : null
     });
     return res.redirect(302, '/pago-ko.html');
   }
