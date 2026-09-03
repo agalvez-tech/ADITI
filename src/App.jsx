@@ -577,7 +577,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
         ))}
       </div>
       {adminTab === 'resumen' && (
-        <AdminResumen students={students} bookings={bookings} />
+        <AdminResumen students={students} bookings={bookings} saveBookings={saveBookings} toast={toast} />
       )}
       {adminTab === 'alumnas' && (
         students.length === 0 ? <div className="empty">Todavía no hay alumnas registradas.</div> :
@@ -676,7 +676,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
   );
 }
 
-function AdminResumen({ students, bookings }) {
+function AdminResumen({ students, bookings, saveBookings, toast }) {
   const [offset, setOffset] = useState(0);
   const date = addDays(new Date(), offset);
   const dateIso = isoDate(date);
@@ -711,9 +711,13 @@ function AdminResumen({ students, bookings }) {
                 {attendees.map(b => {
                   const s = students.find(x => x.id === b.studentId);
                   return (
-                    <li key={b.id} className="muted">
-                      {s ? s.name : 'Alumna eliminada'}
-                      {b.status === 'pendiente_pago' && <span className="pill pill-gray" style={{ marginLeft: 6 }}>Pago pendiente</span>}
+                    <li key={b.id} className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, listStyle: 'none', marginLeft: -18, marginBottom: 4 }}>
+                      <span>{s ? s.name : 'Alumna eliminada'}</span>
+                      {b.status === 'pendiente_pago' && <span className="pill pill-gray">Pago pendiente</span>}
+                      <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => {
+                        saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'cancelada' } : x));
+                        toast('Reserva cancelada');
+                      }}>Cancelar</button>
                     </li>
                   );
                 })}
