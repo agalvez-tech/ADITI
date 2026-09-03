@@ -194,6 +194,7 @@ export default function App() {
             }} />
         ) : tab === 'perfil' ? (
           <PerfilTab me={me} pickProfile={pickProfile} clearProfile={clearProfile}
+            purchases={purchases} bookings={bookings} activePurchaseFor={activePurchaseFor}
             isAdmin={isAdmin} onAdminLogin={loginAdmin} onAdminLogout={logoutAdmin} setTab={setTab} toast={toast} />
         ) : tab === 'admin' ? (
           <AdminTab adminTab={adminTab} setAdminTab={setAdminTab}
@@ -435,7 +436,62 @@ function NotificationsCard({ studentId, toast }) {
   );
 }
 
-function PerfilTab({ me, pickProfile, clearProfile, isAdmin, onAdminLogin, onAdminLogout, setTab, toast }) {
+function MyBonoCard({ me, purchases, activePurchaseFor }) {
+  const active = activePurchaseFor(me.id);
+  const pendiente = purchases.filter(p => p.studentId === me.id && p.status === 'pendiente')
+    .sort((a, b) => new Date(b.purchaseDate) - new Date(a.purchaseDate))[0];
+
+  if (!active && !pendiente) {
+    return (
+      <div className="card">
+        <h3>Mi bono</h3>
+        <p className="muted">No tienes ningún bono activo ahora mismo.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card">
+      <h3>Mi bono</h3>
+      {active ? (
+        <>
+          <p className="muted">{bonoName(active.bonoId)}</p>
+          <p className="muted">Clases disponibles: <b>{active.classesTotal === null ? 'Ilimitadas' : `${active.classesTotal - active.classesUsed} de ${active.classesTotal}`}</b></p>
+          <p className="muted">Válido hasta {fmtDate(new Date(active.expiryDate))}</p>
+        </>
+      ) : (
+        <p className="muted">{bonoName(pendiente.bonoId)} · solicitado, pendiente de confirmar el pago.</p>
+      )}
+    </div>
+  );
+}
+
+function MyUpcomingBookings({ me, bookings }) {
+  const upcoming = bookings
+    .filter(b => b.studentId === me.id && b.status !== 'cancelada' && new Date(b.date) >= addDays(new Date(), -1))
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
+
+  if (upcoming.length === 0) return null;
+
+  const statusLabel = { confirmada: 'Confirmada', pendiente_pago: 'Pendiente de pago' };
+
+  return (
+    <>
+      <div className="sectionlabel">Mis próximas clases</div>
+      {upcoming.map(b => (
+        <div className="card" key={b.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <h3>{b.className}</h3>
+            <p className="muted">{fmtDate(new Date(b.date))} · {b.time}</p>
+          </div>
+          <span className={`pill ${b.status === 'confirmada' ? 'pill-sage' : 'pill-gray'}`}>{statusLabel[b.status] || b.status}</span>
+        </div>
+      ))}
+    </>
+  );
+}
+
+function PerfilTab({ me, pickProfile, clearProfile, purchases, bookings, activePurchaseFor, isAdmin, onAdminLogin, onAdminLogout, setTab, toast }) {
   const [searchPhone, setSearchPhone] = useState('');
   const [searching, setSearching] = useState(false);
 
@@ -467,6 +523,8 @@ function PerfilTab({ me, pickProfile, clearProfile, isAdmin, onAdminLogin, onAdm
             <p className="muted">Cumpleaños: {me.birthday || '—'}</p>
             <p className="muted">Cómo nos conoció: {me.howFound || '—'}</p>
           </div>
+          <MyBonoCard me={me} purchases={purchases} activePurchaseFor={activePurchaseFor} />
+          <MyUpcomingBookings me={me} bookings={bookings} />
           <div className="sectionlabel">Editar datos</div>
           <ProfileForm existing={me} onSave={handleSave} />
           <hr className="sep" />
@@ -503,8 +561,10 @@ function PerfilTab({ me, pickProfile, clearProfile, isAdmin, onAdminLogin, onAdm
 /* ---------------- ADMIN ---------------- */
 function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, activePurchaseFor, savePurchases, saveBookings, saveWallPosts, toast }) {
   const tabs = [
+    { id: 'resumen', label: 'Resumen del día' },
     { id: 'alumnas', label: 'Alumnas' },
     { id: 'bonospend', label: 'Bonos pendientes' },
+    { id: 'bonosactivos', label: 'Bonos confirmados' },
     { id: 'muro', label: 'Publicar en el muro' },
     { id: 'importar', label: 'Importar alumnas' }
   ];
@@ -515,6 +575,9 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
           <div key={t.id} className={`chip ${adminTab === t.id ? 'active' : ''}`} onClick={() => setAdminTab(t.id)}>{t.label}</div>
         ))}
       </div>
+      {adminTab === 'resumen' && (
+        <AdminResumen students={students} bookings={bookings} />
+      )}
       {adminTab === 'alumnas' && (
         students.length === 0 ? <div className="empty">Todavía no hay alumnas registradas.</div> :
         [...students].sort((a, b) => a.name.localeCompare(b.name)).map(s => {
@@ -571,8 +634,77 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
             })}
         </>
       )}
+      {adminTab === 'bonosactivos' && (
+        purchases.filter(p => p.status === 'confirmado').length === 0 ? <div className="empty">Todavía no hay bonos confirmados.</div> :
+          [...purchases].filter(p => p.status === 'confirmado')
+            .sort((a, b) => new Date(b.expiryDate) - new Date(a.expiryDate))
+            .map(p => {
+              const s = students.find(x => x.id === p.studentId);
+              const vencido = new Date(p.expiryDate) < new Date();
+              return (
+                <div className="card" key={p.id}>
+                  <h3>{bonoName(p.bonoId)} <span className="pill pill-lav">{p.paymentMethod === 'redsys' ? 'Tarjeta' : 'Bizum'}</span></h3>
+                  <p className="muted">{s ? s.name : 'Alumna eliminada'} · {s ? s.phone : ''}</p>
+                  <p className="muted">Clases: <b>{p.classesTotal === null ? 'Ilimitadas' : `${p.classesUsed || 0} de ${p.classesTotal} usadas`}</b></p>
+                  <div className="row" style={{ marginTop: 8 }}>
+                    <span className={`pill ${vencido ? 'pill-gray' : 'pill-sage'}`}>{vencido ? 'Caducado' : `Válido hasta ${fmtDate(new Date(p.expiryDate))}`}</span>
+                  </div>
+                </div>
+              );
+            })
+      )}
       {adminTab === 'muro' && <AdminMuro wallPosts={wallPosts} saveWallPosts={saveWallPosts} toast={toast} />}
       {adminTab === 'importar' && <AdminImport students={students} saveStudents={saveStudents} toast={toast} />}
+    </>
+  );
+}
+
+function AdminResumen({ students, bookings }) {
+  const [offset, setOffset] = useState(0);
+  const date = addDays(new Date(), offset);
+  const dateIso = isoDate(date);
+  const dayName = Object.keys(DAY_INDEX).find(k => DAY_INDEX[k] === date.getDay());
+  const classes = SCHEDULE[dayName] || [];
+
+  return (
+    <>
+      <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <button className="btn btn-outline btn-sm" onClick={() => setOffset(offset - 1)}>← Anterior</button>
+        <div style={{ textAlign: 'center' }}>
+          <div className="serif" style={{ fontWeight: 600, fontSize: 17 }}>{fmtDate(date)}</div>
+          {offset !== 0 && <button className="linklike" onClick={() => setOffset(0)}>Volver a hoy</button>}
+        </div>
+        <button className="btn btn-outline btn-sm" onClick={() => setOffset(offset + 1)}>Siguiente →</button>
+      </div>
+      {classes.length === 0 ? (
+        <div className="empty">No hay clases programadas este día.</div>
+      ) : classes.map((c, idx) => {
+        const attendees = bookings.filter(b => b.date === dateIso && b.time === c.time && b.className === c.name && b.status !== 'cancelada');
+        return (
+          <div className="card" key={idx}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 13, justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
+                <div className="time">{c.time}</div>
+                <div className="name">{c.name}</div>
+              </div>
+              <span className="pill pill-lav">{attendees.length} apuntada{attendees.length === 1 ? '' : 's'}</span>
+            </div>
+            {attendees.length > 0 && (
+              <ul style={{ margin: '10px 0 0', paddingLeft: 18 }}>
+                {attendees.map(b => {
+                  const s = students.find(x => x.id === b.studentId);
+                  return (
+                    <li key={b.id} className="muted">
+                      {s ? s.name : 'Alumna eliminada'}
+                      {b.status === 'pendiente_pago' && <span className="pill pill-gray" style={{ marginLeft: 6 }}>Pago pendiente</span>}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        );
+      })}
     </>
   );
 }
