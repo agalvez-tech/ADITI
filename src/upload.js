@@ -37,3 +37,17 @@ export async function uploadWallImage(file) {
   const data = await res.json();
   return data.url;
 }
+
+export async function deleteWallImage(url, adminToken) {
+  try {
+    const res = await fetch('/api/delete-image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-admin-token': adminToken },
+      body: JSON.stringify({ url })
+    });
+    return res.ok;
+  } catch (e) {
+    console.error('Error borrando imagen', e);
+    return false;
+  }
+}

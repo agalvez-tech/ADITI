@@ -3,7 +3,7 @@ import { Redis } from '@upstash/redis';
 const redis = Redis.fromEnv();
 
 function normPhone(p) {
-  return (p || '').replace(/\s/g, '');
+  return (p || '').replace(/[\s-]/g, '').replace(/^(\+34|0034)/, '');
 }
 
 function randomId() {

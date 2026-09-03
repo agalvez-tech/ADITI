@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx';
 import { getData, setData, adminLogin, findStudent, upsertStudent } from './api.js';
 import { payWithRedsys } from './redsys.js';
 import { registerServiceWorker, subscribeToPush, unsubscribeFromPush, getCurrentSubscription, pushSupported } from './push.js';
-import { uploadWallImage } from './upload.js';
+import { uploadWallImage, deleteWallImage } from './upload.js';
 
 const DAYS_ORDER = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Domingo'];
 const DAY_INDEX = { Domingo: 0, Lunes: 1, Martes: 2, 'Miércoles': 3, Jueves: 4, Viernes: 5 };
@@ -200,7 +200,7 @@ export default function App() {
         ) : tab === 'admin' ? (
           <AdminTab adminTab={adminTab} setAdminTab={setAdminTab}
             students={students} saveStudents={saveStudents} bookings={bookings} purchases={purchases} wallPosts={wallPosts}
-            activePurchaseFor={activePurchaseFor}
+            activePurchaseFor={activePurchaseFor} adminToken={adminToken}
             savePurchases={savePurchases} saveBookings={saveBookings} saveWallPosts={saveWallPosts}
             toast={toast} />
         ) : null}
@@ -560,7 +560,50 @@ function PerfilTab({ me, pickProfile, clearProfile, purchases, bookings, activeP
 }
 
 /* ---------------- ADMIN ---------------- */
-function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, activePurchaseFor, savePurchases, saveBookings, saveWallPosts, toast }) {
+function AdminAlumnaCard({ s, students, saveStudents, active, total, toast }) {
+  const [editing, setEditing] = useState(false);
+
+  function handleSave(data, error) {
+    if (error) { toast(error); return; }
+    saveStudents(students.map(x => x.id === s.id ? { ...x, ...data } : x));
+    setEditing(false);
+    toast('Alumna actualizada');
+  }
+
+  function handleDelete() {
+    if (!confirm(`¿Seguro que quieres eliminar a ${s.name}? Sus reservas y bonos no se borrarán, pero dejarán de mostrar su nombre.`)) return;
+    saveStudents(students.filter(x => x.id !== s.id));
+    toast('Alumna eliminada');
+  }
+
+  if (editing) {
+    return (
+      <div className="card">
+        <ProfileForm existing={s} onSave={handleSave} />
+        <button className="linklike" style={{ marginTop: 8 }} onClick={() => setEditing(false)}>Cancelar</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card">
+      <h3>{s.name} {s.isPuntual && <span className="pill pill-peach">Puntual</span>}</h3>
+      <p className="muted">{s.phone} · {s.email}</p>
+      <p className="muted">Cumpleaños: {s.birthday || '—'} · Conoció por: {s.howFound || '—'}</p>
+      <div className="row" style={{ marginTop: 8 }}>
+        <span className={`pill ${active ? 'pill-sage' : 'pill-gray'}`}>{active ? `${bonoName(active.bonoId)} activo` : 'Sin bono activo'}</span>
+        <span className="pill pill-lav">{total} reservas totales</span>
+        {typeof s.legacyReservas === 'number' && <span className="pill pill-gray">{s.legacyReservas} históricas (app anterior)</span>}
+      </div>
+      <div className="row" style={{ marginTop: 10 }}>
+        <button className="linklike" onClick={() => setEditing(true)}>Editar</button>
+        <button className="linklike" style={{ color: 'var(--danger)' }} onClick={handleDelete}>Eliminar</button>
+      </div>
+    </div>
+  );
+}
+
+function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, activePurchaseFor, adminToken, savePurchases, saveBookings, saveWallPosts, toast }) {
   const tabs = [
     { id: 'resumen', label: 'Resumen del día' },
     { id: 'alumnas', label: 'Alumnas' },
@@ -581,22 +624,11 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
       )}
       {adminTab === 'alumnas' && (
         students.length === 0 ? <div className="empty">Todavía no hay alumnas registradas.</div> :
-        [...students].sort((a, b) => a.name.localeCompare(b.name)).map(s => {
-          const active = activePurchaseFor(s.id);
-          const total = bookings.filter(b => b.studentId === s.id).length;
-          return (
-            <div className="card" key={s.id}>
-              <h3>{s.name} {s.isPuntual && <span className="pill pill-peach">Puntual</span>}</h3>
-              <p className="muted">{s.phone} · {s.email}</p>
-              <p className="muted">Cumpleaños: {s.birthday || '—'} · Conoció por: {s.howFound || '—'}</p>
-              <div className="row" style={{ marginTop: 8 }}>
-                <span className={`pill ${active ? 'pill-sage' : 'pill-gray'}`}>{active ? `${bonoName(active.bonoId)} activo` : 'Sin bono activo'}</span>
-                <span className="pill pill-lav">{total} reservas totales</span>
-                {typeof s.legacyReservas === 'number' && <span className="pill pill-gray">{s.legacyReservas} históricas (app anterior)</span>}
-              </div>
-            </div>
-          );
-        })
+        [...students].sort((a, b) => a.name.localeCompare(b.name)).map(s => (
+          <AdminAlumnaCard key={s.id} s={s} students={students} saveStudents={saveStudents}
+            active={activePurchaseFor(s.id)} total={bookings.filter(b => b.studentId === s.id).length}
+            toast={toast} />
+        ))
       )}
       {adminTab === 'bonospend' && (
         <>
@@ -670,7 +702,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
               })}
         </>
       )}
-      {adminTab === 'muro' && <AdminMuro wallPosts={wallPosts} saveWallPosts={saveWallPosts} toast={toast} />}
+      {adminTab === 'muro' && <AdminMuro wallPosts={wallPosts} saveWallPosts={saveWallPosts} adminToken={adminToken} toast={toast} />}
       {adminTab === 'importar' && <AdminImport students={students} saveStudents={saveStudents} toast={toast} />}
     </>
   );
@@ -730,7 +762,7 @@ function AdminResumen({ students, bookings, saveBookings, toast }) {
   );
 }
 
-function AdminMuro({ wallPosts, saveWallPosts, toast }) {
+function AdminMuro({ wallPosts, saveWallPosts, adminToken, toast }) {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [imageUrl, setImageUrl] = useState(null);
@@ -753,6 +785,7 @@ function AdminMuro({ wallPosts, saveWallPosts, toast }) {
   }
 
   function removeImage() {
+    if (imageUrl) deleteWallImage(imageUrl, adminToken);
     setImageUrl(null);
     setImagePreview(null);
   }
@@ -794,7 +827,11 @@ function AdminMuro({ wallPosts, saveWallPosts, toast }) {
           {p.imageUrl && <img src={p.imageUrl} alt="" className="postimg" />}
           <p>{p.content}</p>
           <button className="linklike" style={{ color: 'var(--danger)', marginTop: 8 }}
-            onClick={() => saveWallPosts(wallPosts.filter(x => x.id !== p.id))}>Eliminar</button>
+            onClick={() => {
+              if (!confirm('¿Seguro que quieres eliminar esta publicación del muro?')) return;
+              if (p.imageUrl) deleteWallImage(p.imageUrl, adminToken);
+              saveWallPosts(wallPosts.filter(x => x.id !== p.id));
+            }}>Eliminar</button>
         </div>
       ))}
     </>
