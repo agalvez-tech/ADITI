@@ -6,10 +6,13 @@ const redis = Redis.fromEnv();
 // Evita que alguien use el endpoint para escribir cualquier cosa en tu Redis.
 const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts'];
 
-// Claves que contienen datos sensibles o de gestión: solo Beatriz (admin) puede
-// leerlas/escribirlas enteras. Las alumnas usan api/student-profile.js para su
-// propia ficha, así nunca reciben el listado completo.
-const ADMIN_ONLY_KEYS = ['students', 'wallPosts'];
+// 'students' contiene datos personales de todas las alumnas: ni lectura ni
+// escritura completas sin ser admin (las alumnas usan api/student-profile.js
+// para su propia ficha, así nunca reciben el listado completo).
+const ADMIN_ONLY_READ_KEYS = ['students'];
+
+// 'wallPosts' (el Muro) lo lee cualquier alumna, pero solo Beatriz publica o borra.
+const ADMIN_ONLY_WRITE_KEYS = ['students', 'wallPosts'];
 
 // Para 'bookings' y 'purchases', las alumnas sí necesitan poder crear su propia
 // reserva/compra sin ser admin. Sin token, solo se permite un cambio mínimo y
@@ -95,11 +98,10 @@ export default async function handler(req, res) {
 
   const admin = isAdminRequest(req);
 
-  if (ADMIN_ONLY_KEYS.includes(key) && !admin) {
-    return res.status(401).json({ error: 'Requiere acceso de administración' });
-  }
-
   if (req.method === 'GET') {
+    if (ADMIN_ONLY_READ_KEYS.includes(key) && !admin) {
+      return res.status(401).json({ error: 'Requiere acceso de administración' });
+    }
     try {
       const value = await redis.get(key);
       return res.status(200).json({ value: value ?? null });
@@ -109,6 +111,9 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'POST') {
+    if (ADMIN_ONLY_WRITE_KEYS.includes(key) && !admin) {
+      return res.status(401).json({ error: 'Requiere acceso de administración' });
+    }
     try {
       const { value } = req.body || {};
 
