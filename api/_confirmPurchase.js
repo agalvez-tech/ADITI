@@ -9,7 +9,9 @@ export async function confirmPaymentFromParams(params) {
   const success = responseCode >= 0 && responseCode <= 99;
 
   if (success && params.Ds_MerchantData) {
-    const { kind, itemId } = JSON.parse(params.Ds_MerchantData);
+    // Redsys devuelve Ds_MerchantData codificado como URL (%7B%22kind%22...);
+    // si además de codificar viniera ya en JSON plano, decodeURIComponent no lo altera.
+    const { kind, itemId } = JSON.parse(decodeURIComponent(params.Ds_MerchantData));
 
     if (kind === 'bono') {
       const purchases = (await redis.get('purchases')) || [];
