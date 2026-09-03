@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as XLSX from 'xlsx';
-import { getData, setData } from './api.js';
+import { getData, setData, adminLogin, findStudent, upsertStudent } from './api.js';
 import { payWithRedsys } from './redsys.js';
 import { registerServiceWorker, subscribeToPush, unsubscribeFromPush, getCurrentSubscription, pushSupported } from './push.js';
 import { uploadWallImage } from './upload.js';
@@ -65,7 +65,6 @@ const BONOS = [
 ];
 const CLASE_SUELTA_PRECIO = 20;
 const BIZUM_PHONE = '691750534';
-const ADMIN_PIN = 'ADITI2026';
 const HOW_FOUND = ['Instagram', 'Facebook', 'Google', 'Recomendación de una amiga', 'Al pasar por el centro', 'Cartel o flyer', 'Web aditifunctionalyoga.es', 'Otro'];
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
@@ -95,7 +94,9 @@ export default function App() {
   const [purchases, setPurchases] = useState([]);
   const [wallPosts, setWallPosts] = useState([]);
   const [myId, setMyId] = useState(() => localStorage.getItem('aditi_myId') || null);
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [me, setMe] = useState(null);
+  const [adminToken, setAdminToken] = useState(() => localStorage.getItem('aditi_admin_token') || null);
+  const [isAdmin, setIsAdmin] = useState(() => !!localStorage.getItem('aditi_admin_token'));
   const [selectedDay, setSelectedDay] = useState(todayDayName());
   const [adminTab, setAdminTab] = useState('alumnas');
   const [toastMsg, setToastMsg] = useState(null);
@@ -110,10 +111,11 @@ export default function App() {
     let cancelled = false;
     function loadAll() {
       return Promise.all([
-        getData('students'), getData('bookings'), getData('purchases'), getData('wallPosts')
+        isAdmin ? getData('students', adminToken) : Promise.resolve(null),
+        getData('bookings'), getData('purchases'), getData('wallPosts')
       ]).then(([s, b, p, w]) => {
         if (cancelled) return;
-        setStudents(s || []);
+        if (isAdmin) setStudents(s || []);
         setBookings(b || []);
         setPurchases(p || []);
         setWallPosts(w || []);
@@ -126,7 +128,15 @@ export default function App() {
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) loadAll(); });
     return () => { cancelled = true; clearInterval(interval); window.removeEventListener('focus', onFocus); };
-  }, []);
+  }, [isAdmin, adminToken]);
+
+  // La ficha propia se resuelve por separado (no expone el listado completo de alumnas).
+  useEffect(() => {
+    let cancelled = false;
+    if (!myId) { setMe(null); return; }
+    findStudent({ id: myId }).then(s => { if (!cancelled) setMe(s || null); });
+    return () => { cancelled = true; };
+  }, [myId]);
 
   function toast(msg) {
     setToastMsg(msg);
@@ -134,14 +144,27 @@ export default function App() {
     toastTimer.current = setTimeout(() => setToastMsg(null), 2600);
   }
 
-  function saveStudents(next) { setStudents(next); setData('students', next); }
-  function saveBookings(next) { setBookings(next); setData('bookings', next); }
-  function savePurchases(next) { setPurchases(next); setData('purchases', next); }
-  function saveWallPosts(next) { setWallPosts(next); setData('wallPosts', next); }
+  function saveStudents(next) { setStudents(next); setData('students', next, adminToken); }
+  function saveBookings(next) { setBookings(next); setData('bookings', next, adminToken); }
+  function savePurchases(next) { setPurchases(next); setData('purchases', next, adminToken); }
+  function saveWallPosts(next) { setWallPosts(next); setData('wallPosts', next, adminToken); }
   function pickProfile(id) { setMyId(id); localStorage.setItem('aditi_myId', id); }
   function clearProfile() { setMyId(null); localStorage.removeItem('aditi_myId'); }
 
-  const me = myId ? students.find(s => s.id === myId) : null;
+  async function loginAdmin(pin) {
+    const token = await adminLogin(pin);
+    if (token) {
+      setAdminToken(token);
+      setIsAdmin(true);
+      localStorage.setItem('aditi_admin_token', token);
+    }
+    return !!token;
+  }
+  function logoutAdmin() {
+    setAdminToken(null);
+    setIsAdmin(false);
+    localStorage.removeItem('aditi_admin_token');
+  }
 
   function activePurchaseFor(studentId, onDate) {
     const today = onDate || new Date();
@@ -170,9 +193,8 @@ export default function App() {
               setModal({ type: 'bono', bono });
             }} />
         ) : tab === 'perfil' ? (
-          <PerfilTab me={me} students={students} saveStudents={saveStudents}
-            pickProfile={pickProfile} clearProfile={clearProfile}
-            isAdmin={isAdmin} setIsAdmin={setIsAdmin} setTab={setTab} toast={toast} />
+          <PerfilTab me={me} pickProfile={pickProfile} clearProfile={clearProfile}
+            isAdmin={isAdmin} onAdminLogin={loginAdmin} onAdminLogout={logoutAdmin} setTab={setTab} toast={toast} />
         ) : tab === 'admin' ? (
           <AdminTab adminTab={adminTab} setAdminTab={setAdminTab}
             students={students} saveStudents={saveStudents} bookings={bookings} purchases={purchases} wallPosts={wallPosts}
@@ -188,7 +210,7 @@ export default function App() {
       {toastMsg && <div className="toast">{toastMsg}</div>}
       {modal && modal.type === 'booking' && (
         <BookingModal
-          modal={modal} setModal={setModal} students={students} saveStudents={saveStudents}
+          modal={modal} setModal={setModal}
           bookings={bookings} saveBookings={saveBookings} purchases={purchases} savePurchases={savePurchases}
           me={me} myId={myId} pickProfile={pickProfile} activePurchaseFor={activePurchaseFor}
           toast={toast} onClose={() => setModal(null)}
@@ -413,25 +435,23 @@ function NotificationsCard({ studentId, toast }) {
   );
 }
 
-function PerfilTab({ me, students, saveStudents, pickProfile, clearProfile, isAdmin, setIsAdmin, setTab, toast }) {
+function PerfilTab({ me, pickProfile, clearProfile, isAdmin, onAdminLogin, onAdminLogout, setTab, toast }) {
   const [searchPhone, setSearchPhone] = useState('');
+  const [searching, setSearching] = useState(false);
 
-  function handleSave(data, error) {
+  async function handleSave(data, error) {
     if (error) { toast(error); return; }
-    if (me) {
-      const next = students.map(s => s.id === me.id ? { ...s, ...data } : s);
-      saveStudents(next);
-    } else {
-      const newStudent = { id: uid(), ...data, createdAt: new Date().toISOString() };
-      saveStudents([...students, newStudent]);
-      pickProfile(newStudent.id);
-    }
+    const saved = await upsertStudent(me ? { id: me.id, ...data } : { id: uid(), ...data, createdAt: new Date().toISOString() });
+    if (!saved) { toast('No se pudo guardar el perfil, inténtalo de nuevo'); return; }
+    if (!me) pickProfile(saved.id);
     toast('Perfil guardado');
   }
 
-  function handleSearch() {
+  async function handleSearch() {
     if (!searchPhone.trim()) { toast('Escribe un teléfono para buscar'); return; }
-    const found = students.find(s => s.phone.replace(/\s/g, '') === searchPhone.replace(/\s/g, ''));
+    setSearching(true);
+    const found = await findStudent({ phone: searchPhone });
+    setSearching(false);
     if (found) { pickProfile(found.id); toast(`Perfil encontrado, ¡hola ${found.name.split(' ')[0]}!`); }
     else toast('No encontramos ese teléfono. Crea un perfil nuevo.');
   }
@@ -459,7 +479,7 @@ function PerfilTab({ me, students, saveStudents, pickProfile, clearProfile, isAd
           <div className="card">
             <label>Buscar por teléfono</label>
             <input type="tel" value={searchPhone} onChange={e => setSearchPhone(e.target.value)} placeholder="Ej. 600123456" />
-            <button className="btn btn-outline" style={{ marginTop: 10 }} onClick={handleSearch}>Buscar mi perfil</button>
+            <button className="btn btn-outline" style={{ marginTop: 10 }} disabled={searching} onClick={handleSearch}>{searching ? 'Buscando…' : 'Buscar mi perfil'}</button>
           </div>
           <div className="sectionlabel">Crear perfil nuevo</div>
           <ProfileForm existing={null} onSave={handleSave} />
@@ -467,12 +487,13 @@ function PerfilTab({ me, students, saveStudents, pickProfile, clearProfile, isAd
       )}
       <hr className="sep" />
       {isAdmin ? (
-        <button className="btn btn-outline" onClick={() => { setIsAdmin(false); setTab('perfil'); }}>Salir del panel de Beatriz</button>
+        <button className="btn btn-outline" onClick={() => { onAdminLogout(); setTab('perfil'); }}>Salir del panel de Beatriz</button>
       ) : (
-        <button className="linklike" onClick={() => {
+        <button className="linklike" onClick={async () => {
           const pin = prompt('Introduce el PIN de acceso de Beatriz:');
-          if (pin === ADMIN_PIN) { setIsAdmin(true); setTab('admin'); }
-          else if (pin !== null) toast('PIN incorrecto');
+          if (pin === null) return;
+          const ok = await onAdminLogin(pin);
+          if (ok) setTab('admin'); else toast('PIN incorrecto');
         }}>¿Eres Beatriz? Acceso profesora</button>
       )}
     </>
@@ -628,7 +649,7 @@ function AdminMuro({ wallPosts, saveWallPosts, toast }) {
 }
 
 /* ---------------- MODALES ---------------- */
-function BookingModal({ modal, setModal, students, saveStudents, bookings, saveBookings, purchases, savePurchases, me, pickProfile, activePurchaseFor, toast, onClose }) {
+function BookingModal({ modal, setModal, bookings, saveBookings, purchases, savePurchases, me, pickProfile, activePurchaseFor, toast, onClose }) {
   const { day, cls, dateIso } = modal;
   const dates = nextDatesForDay(day, 4);
 
@@ -687,7 +708,7 @@ function BookingModal({ modal, setModal, students, saveStudents, bookings, saveB
     } else {
       step2 = (
         <NoProfileBookingStep
-          dateIso={dateIso} students={students} saveStudents={saveStudents}
+          dateIso={dateIso}
           pickProfile={pickProfile} toast={toast}
           onConfirmPuntual={(quickId) => confirmBookingSuelta(quickId)}
           onConfirmPuntualCard={(quickId) => confirmBookingSueltaCard(quickId)}
@@ -715,17 +736,18 @@ function BookingModal({ modal, setModal, students, saveStudents, bookings, saveB
   );
 }
 
-function NoProfileBookingStep({ dateIso, students, saveStudents, pickProfile, toast, onConfirmPuntual, onConfirmPuntualCard }) {
+function NoProfileBookingStep({ dateIso, pickProfile, toast, onConfirmPuntual, onConfirmPuntualCard }) {
   const [path, setPath] = useState(null);
   const [searchPhone, setSearchPhone] = useState('');
   const [searchMsg, setSearchMsg] = useState('');
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
+  const [busy, setBusy] = useState(false);
 
-  function makeQuickStudent() {
+  async function makeQuickStudent() {
     const quick = { id: uid(), name: name.trim(), email: '', phone: phone.trim(), birthday: '', howFound: '', isPuntual: true, createdAt: new Date().toISOString() };
-    saveStudents([...students, quick]);
-    return quick;
+    const saved = await upsertStudent(quick);
+    return saved || quick;
   }
 
   return (
@@ -744,11 +766,13 @@ function NoProfileBookingStep({ dateIso, students, saveStudents, pickProfile, to
         <>
           <label>Teléfono</label>
           <input type="tel" value={searchPhone} onChange={e => setSearchPhone(e.target.value)} placeholder="600123456" />
-          <button className="btn btn-outline btn-sm" style={{ marginTop: 10 }} onClick={() => {
-            const found = students.find(s => s.phone.replace(/\s/g, '') === searchPhone.replace(/\s/g, ''));
+          <button className="btn btn-outline btn-sm" style={{ marginTop: 10 }} disabled={busy} onClick={async () => {
+            setBusy(true);
+            const found = await findStudent({ phone: searchPhone });
+            setBusy(false);
             if (found) { pickProfile(found.id); toast(`Perfil encontrado, ¡hola ${found.name.split(' ')[0]}!`); }
             else setSearchMsg('No encontramos ese teléfono.');
-          }}>Buscar</button>
+          }}>{busy ? 'Buscando…' : 'Buscar'}</button>
           {searchMsg && <div className="muted" style={{ marginTop: 8 }}>{searchMsg}</div>}
         </>
       )}
@@ -758,14 +782,18 @@ function NoProfileBookingStep({ dateIso, students, saveStudents, pickProfile, to
           <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Nombre y apellidos" />
           <label>Teléfono</label>
           <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="600123456" />
-          <button className="btn btn-primary btn-sm" style={{ marginTop: 10, marginRight: 8 }} onClick={() => {
+          <button className="btn btn-primary btn-sm" style={{ marginTop: 10, marginRight: 8 }} disabled={busy} onClick={async () => {
             if (!name.trim() || !phone.trim()) { toast('Nombre y teléfono son obligatorios'); return; }
-            const quick = makeQuickStudent();
+            setBusy(true);
+            const quick = await makeQuickStudent();
+            setBusy(false);
             onConfirmPuntualCard(quick.id);
           }}>Pagar con tarjeta</button>
-          <button className="btn btn-outline btn-sm" style={{ marginTop: 10 }} onClick={() => {
+          <button className="btn btn-outline btn-sm" style={{ marginTop: 10 }} disabled={busy} onClick={async () => {
             if (!name.trim() || !phone.trim()) { toast('Nombre y teléfono son obligatorios'); return; }
-            const quick = makeQuickStudent();
+            setBusy(true);
+            const quick = await makeQuickStudent();
+            setBusy(false);
             onConfirmPuntual(quick.id);
           }}>Pagar por Bizum al {BIZUM_PHONE}</button>
         </>
