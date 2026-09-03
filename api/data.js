@@ -58,13 +58,21 @@ function diffSingleChange(current, next) {
   return null;
 }
 
-function isBookingChangeAllowed(diff) {
+const CLASS_CAPACITY = 8;
+
+function isBookingChangeAllowed(diff, current) {
   if (!diff) return false;
   if (diff.type === 'noop') return true;
   if (diff.type !== 'append') return false; // sin token, no se permite modificar reservas existentes
   const item = diff.item || {};
   // Solo altas nuevas: pendiente de pago (bizum/tarjeta) o confirmada por bono propio.
-  return item.status === 'pendiente_pago' || (item.status === 'confirmada' && item.paymentMethod === 'bono');
+  const validNew = item.status === 'pendiente_pago' || (item.status === 'confirmada' && item.paymentMethod === 'bono');
+  if (!validNew) return false;
+
+  const occupied = (Array.isArray(current) ? current : [])
+    .filter(b => b.date === item.date && b.time === item.time && b.className === item.className && b.status !== 'cancelada')
+    .length;
+  return occupied < CLASS_CAPACITY;
 }
 
 function isPurchaseChangeAllowed(diff) {
@@ -120,7 +128,7 @@ export default async function handler(req, res) {
       if (!admin && (key === 'bookings' || key === 'purchases')) {
         const current = await redis.get(key);
         const diff = diffSingleChange(current, value);
-        const allowed = key === 'bookings' ? isBookingChangeAllowed(diff) : isPurchaseChangeAllowed(diff);
+        const allowed = key === 'bookings' ? isBookingChangeAllowed(diff, current) : isPurchaseChangeAllowed(diff);
         if (!allowed) {
           return res.status(403).json({ error: 'Cambio no permitido' });
         }

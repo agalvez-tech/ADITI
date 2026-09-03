@@ -64,6 +64,7 @@ const BONOS = [
   { id: 'ilimitado', name: 'Bono ilimitado', desc: 'Clases ilimitadas', price: 150, classes: null }
 ];
 const CLASE_SUELTA_PRECIO = 20;
+const CLASS_CAPACITY = 8;
 const BIZUM_PHONE = '691750534';
 const HOW_FOUND = ['Instagram', 'Facebook', 'Google', 'Recomendación de una amiga', 'Al pasar por el centro', 'Cartel o flyer', 'Web aditifunctionalyoga.es', 'Otro'];
 
@@ -635,23 +636,39 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
         </>
       )}
       {adminTab === 'bonosactivos' && (
-        purchases.filter(p => p.status === 'confirmado').length === 0 ? <div className="empty">Todavía no hay bonos confirmados.</div> :
-          [...purchases].filter(p => p.status === 'confirmado')
-            .sort((a, b) => new Date(b.expiryDate) - new Date(a.expiryDate))
-            .map(p => {
-              const s = students.find(x => x.id === p.studentId);
-              const vencido = new Date(p.expiryDate) < new Date();
-              return (
-                <div className="card" key={p.id}>
-                  <h3>{bonoName(p.bonoId)} <span className="pill pill-lav">{p.paymentMethod === 'redsys' ? 'Tarjeta' : 'Bizum'}</span></h3>
-                  <p className="muted">{s ? s.name : 'Alumna eliminada'} · {s ? s.phone : ''}</p>
-                  <p className="muted">Clases: <b>{p.classesTotal === null ? 'Ilimitadas' : `${p.classesUsed || 0} de ${p.classesTotal} usadas`}</b></p>
-                  <div className="row" style={{ marginTop: 8 }}>
-                    <span className={`pill ${vencido ? 'pill-gray' : 'pill-sage'}`}>{vencido ? 'Caducado' : `Válido hasta ${fmtDate(new Date(p.expiryDate))}`}</span>
+        <>
+          <div className="sectionlabel">Bonos confirmados</div>
+          {purchases.filter(p => p.status === 'confirmado').length === 0 ? <div className="empty">Todavía no hay bonos confirmados.</div> :
+            [...purchases].filter(p => p.status === 'confirmado')
+              .sort((a, b) => new Date(b.expiryDate) - new Date(a.expiryDate))
+              .map(p => {
+                const s = students.find(x => x.id === p.studentId);
+                const vencido = new Date(p.expiryDate) < new Date();
+                return (
+                  <div className="card" key={p.id}>
+                    <h3>{bonoName(p.bonoId)} <span className="pill pill-lav">{p.paymentMethod === 'redsys' ? 'Tarjeta' : 'Bizum'}</span></h3>
+                    <p className="muted">{s ? s.name : 'Alumna eliminada'} · {s ? s.phone : ''}</p>
+                    <p className="muted">Clases: <b>{p.classesTotal === null ? 'Ilimitadas' : `${p.classesUsed || 0} de ${p.classesTotal} usadas`}</b></p>
+                    <div className="row" style={{ marginTop: 8 }}>
+                      <span className={`pill ${vencido ? 'pill-gray' : 'pill-sage'}`}>{vencido ? 'Caducado' : `Válido hasta ${fmtDate(new Date(p.expiryDate))}`}</span>
+                    </div>
                   </div>
-                </div>
-              );
-            })
+                );
+              })}
+          <div className="sectionlabel">Clases sueltas confirmadas</div>
+          {bookings.filter(b => b.status === 'confirmada' && b.paymentMethod !== 'bono').length === 0 ? <div className="empty">Todavía no hay clases sueltas confirmadas.</div> :
+            [...bookings].filter(b => b.status === 'confirmada' && b.paymentMethod !== 'bono')
+              .sort((a, b) => new Date(b.date) - new Date(a.date))
+              .map(b => {
+                const s = students.find(x => x.id === b.studentId);
+                return (
+                  <div className="card" key={b.id}>
+                    <h3>{b.className} <span className="pill pill-lav">{b.paymentMethod === 'redsys' ? 'Tarjeta' : 'Bizum'}</span></h3>
+                    <p className="muted">{s ? s.name : 'Alumna eliminada'} · {fmtDate(new Date(b.date))} {b.time}</p>
+                  </div>
+                );
+              })}
+        </>
       )}
       {adminTab === 'muro' && <AdminMuro wallPosts={wallPosts} saveWallPosts={saveWallPosts} toast={toast} />}
       {adminTab === 'importar' && <AdminImport students={students} saveStudents={saveStudents} toast={toast} />}
@@ -811,10 +828,14 @@ function BookingModal({ modal, setModal, bookings, saveBookings, purchases, save
 
   let step2 = null;
   if (dateIso) {
+    const attendeeCount = bookings.filter(b => b.date === dateIso && b.time === cls.time && b.className === cls.name && b.status !== 'cancelada').length;
+    const full = attendeeCount >= CLASS_CAPACITY;
     if (me) {
       const already = bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === cls.time && b.className === cls.name && b.status !== 'cancelada');
       if (already) {
         step2 = <p className="muted" style={{ marginTop: 12 }}>Ya tienes esta clase reservada ese día.</p>;
+      } else if (full) {
+        step2 = <p className="muted" style={{ marginTop: 12 }}>Esta clase ya está completa (máximo {CLASS_CAPACITY} alumnas). Elige otra fecha.</p>;
       } else {
         const active = activePurchaseFor(me.id, new Date(dateIso));
         step2 = (
@@ -837,6 +858,13 @@ function BookingModal({ modal, setModal, bookings, saveBookings, purchases, save
           </>
         );
       }
+    } else if (full) {
+      step2 = (
+        <>
+          <hr className="sep" />
+          <p className="muted">Esta clase ya está completa (máximo {CLASS_CAPACITY} alumnas). Elige otra fecha.</p>
+        </>
+      );
     } else {
       step2 = (
         <NoProfileBookingStep
@@ -857,9 +885,10 @@ function BookingModal({ modal, setModal, bookings, saveBookings, purchases, save
         <p className="muted">Elige la fecha en la que quieres asistir.</p>
         {dates.map(d => {
           const iso = isoDate(d);
+          const dateFull = bookings.filter(b => b.date === iso && b.time === cls.time && b.className === cls.name && b.status !== 'cancelada').length >= CLASS_CAPACITY;
           return (
             <button key={iso} className={`datebtn ${dateIso === iso ? 'selected' : ''}`}
-              onClick={() => setModal({ ...modal, dateIso: iso })}>{fmtDate(d)}</button>
+              onClick={() => setModal({ ...modal, dateIso: iso })}>{fmtDate(d)}{dateFull ? ' · Completo' : ''}</button>
           );
         })}
         {step2}
