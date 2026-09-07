@@ -69,6 +69,7 @@ const BIZUM_PHONE = '691750534';
 const HOW_FOUND = ['Instagram', 'Facebook', 'Google', 'Recomendación de una amiga', 'Al pasar por el centro', 'Cartel o flyer', 'Web aditifunctionalyoga.es', 'Otro'];
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+function isValidIntlPhone(phone) { return /^\+\d{8,15}$/.test((phone || '').replace(/\s/g, '')); }
 function todayDayName() {
   const idx = new Date().getDay();
   return Object.keys(DAY_INDEX).find(k => DAY_INDEX[k] === idx) || 'Lunes';
@@ -375,8 +376,8 @@ function ProfileForm({ existing, onSave }) {
       <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Nombre completo" />
       <label>Email</label>
       <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="tunombre@correo.com" />
-      <label>Teléfono</label>
-      <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="600123456" />
+      <label>Teléfono (con prefijo de país)</label>
+      <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="+34600123456" />
       <label>Fecha de nacimiento</label>
       <input type="date" value={birthday} onChange={e => setBirthday(e.target.value)} />
       <label>¿Cómo nos has conocido?</label>
@@ -386,6 +387,7 @@ function ProfileForm({ existing, onSave }) {
       </select>
       <button className="btn btn-primary" style={{ marginTop: 16 }} onClick={() => {
         if (!name.trim() || !phone.trim()) return onSave(null, 'Nombre y teléfono son obligatorios');
+        if (!isValidIntlPhone(phone)) return onSave(null, 'El teléfono debe incluir el prefijo del país, ej. +34600123456');
         onSave({ name: name.trim(), email: email.trim(), phone: phone.trim(), birthday, howFound });
       }}>{existing ? 'Guardar cambios' : 'Crear mi perfil'}</button>
     </div>
@@ -982,10 +984,11 @@ function NoProfileBookingStep({ dateIso, pickProfile, toast, onConfirmPuntual, o
         <>
           <label>Nombre</label>
           <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Nombre y apellidos" />
-          <label>Teléfono</label>
-          <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="600123456" />
+          <label>Teléfono (con prefijo de país)</label>
+          <input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="+34600123456" />
           <button className="btn btn-primary btn-sm" style={{ marginTop: 10, marginRight: 8 }} disabled={busy} onClick={async () => {
             if (!name.trim() || !phone.trim()) { toast('Nombre y teléfono son obligatorios'); return; }
+            if (!isValidIntlPhone(phone)) { toast('El teléfono debe incluir el prefijo del país, ej. +34600123456'); return; }
             setBusy(true);
             const quick = await makeQuickStudent();
             setBusy(false);
@@ -993,6 +996,7 @@ function NoProfileBookingStep({ dateIso, pickProfile, toast, onConfirmPuntual, o
           }}>Pagar con tarjeta</button>
           <button className="btn btn-outline btn-sm" style={{ marginTop: 10 }} disabled={busy} onClick={async () => {
             if (!name.trim() || !phone.trim()) { toast('Nombre y teléfono son obligatorios'); return; }
+            if (!isValidIntlPhone(phone)) { toast('El teléfono debe incluir el prefijo del país, ej. +34600123456'); return; }
             setBusy(true);
             const quick = await makeQuickStudent();
             setBusy(false);
