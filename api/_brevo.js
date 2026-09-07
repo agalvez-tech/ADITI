@@ -16,6 +16,16 @@ async function brevoPost(path, body) {
   });
 }
 
+// Brevo exige el teléfono en formato internacional (+34...); las alumnas lo
+// guardan como un número español normal de 9 dígitos, sin prefijo.
+function toE164(phone) {
+  if (!phone) return undefined;
+  const digits = phone.replace(/[^\d+]/g, '');
+  if (digits.startsWith('+')) return digits;
+  const clean = digits.replace(/^0+/, '');
+  return clean.length === 9 ? `+34${clean}` : undefined;
+}
+
 export function hasActiveBono(purchases, studentId, onDate) {
   const now = onDate || new Date();
   return (purchases || []).some(p =>
@@ -40,7 +50,7 @@ export async function syncStudentContact(student, purchases) {
   try {
     const res = await brevoPost('/contacts', {
       email: student.email,
-      attributes: { FIRSTNAME: (student.name || '').split(' ')[0], SMS: student.phone },
+      attributes: { FIRSTNAME: (student.name || '').split(' ')[0], SMS: toE164(student.phone) },
       listIds: [Number(listId)],
       updateEnabled: true
     });
