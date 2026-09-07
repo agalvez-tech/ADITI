@@ -1,4 +1,5 @@
 import { Redis } from '@upstash/redis';
+import { notifyBonoConfirmado, notifySueltaConfirmada } from './_brevo.js';
 
 const redis = Redis.fromEnv();
 
@@ -15,16 +16,32 @@ export async function confirmPaymentFromParams(params) {
 
     if (kind === 'bono') {
       const purchases = (await redis.get('purchases')) || [];
-      const next = purchases.map(p => p.id === itemId
-        ? { ...p, status: 'confirmado', paymentMethod: 'redsys', expiryDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() }
-        : p);
+      let confirmed = null;
+      const next = purchases.map(p => {
+        if (p.id !== itemId) return p;
+        confirmed = { ...p, status: 'confirmado', paymentMethod: 'redsys', expiryDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() };
+        return confirmed;
+      });
       await redis.set('purchases', next);
+      if (confirmed) {
+        const students = (await redis.get('students')) || [];
+        const student = students.find(s => s.id === confirmed.studentId);
+        await notifyBonoConfirmado(student, confirmed);
+      }
     } else if (kind === 'suelta') {
       const bookings = (await redis.get('bookings')) || [];
-      const next = bookings.map(b => b.id === itemId
-        ? { ...b, status: 'confirmada', paymentMethod: 'redsys' }
-        : b);
+      let confirmed = null;
+      const next = bookings.map(b => {
+        if (b.id !== itemId) return b;
+        confirmed = { ...b, status: 'confirmada', paymentMethod: 'redsys' };
+        return confirmed;
+      });
       await redis.set('bookings', next);
+      if (confirmed) {
+        const students = (await redis.get('students')) || [];
+        const student = students.find(s => s.id === confirmed.studentId);
+        await notifySueltaConfirmada(student, confirmed);
+      }
     }
   }
 

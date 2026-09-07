@@ -1,4 +1,5 @@
 import { Redis } from '@upstash/redis';
+import { syncStudentContact } from './_brevo.js';
 
 const redis = Redis.fromEnv();
 
@@ -46,6 +47,14 @@ export default async function handler(req, res) {
     }
 
     await redis.set('students', next);
+
+    try {
+      const purchases = (await redis.get('purchases')) || [];
+      await syncStudentContact(saved, purchases);
+    } catch (e) {
+      console.error('Brevo: error sincronizando tras guardar perfil', e);
+    }
+
     return res.status(200).json({ student: saved });
   }
 

@@ -1,4 +1,5 @@
 import { Redis } from '@upstash/redis';
+import { syncStudentContact, notifyBonoConfirmado, notifySueltaConfirmada, broadcastWallPost } from './_brevo.js';
 
 const redis = Redis.fromEnv();
 
@@ -97,6 +98,33 @@ function isPurchaseChangeAllowed(diff) {
   return false;
 }
 
+// Dispara las integraciones de Brevo según qué colección cambió. No hace
+// nada si BREVO_API_KEY no está configurada (ver api/_brevo.js).
+async function runBrevoSideEffects(key, value, diff) {
+  if (key === 'students') {
+    const purchases = (await redis.get('purchases')) || [];
+    await Promise.allSettled((value || []).map(s => syncStudentContact(s, purchases)));
+    return;
+  }
+  if (key === 'purchases' && diff?.type === 'modify' && diff.before.status === 'pendiente' && diff.after.status === 'confirmado') {
+    const students = (await redis.get('students')) || [];
+    const student = students.find(s => s.id === diff.after.studentId);
+    await notifyBonoConfirmado(student, diff.after);
+    return;
+  }
+  if (key === 'bookings' && diff?.type === 'modify' && diff.before.status === 'pendiente_pago' && diff.after.status === 'confirmada') {
+    const students = (await redis.get('students')) || [];
+    const student = students.find(s => s.id === diff.after.studentId);
+    await notifySueltaConfirmada(student, diff.after);
+    return;
+  }
+  if (key === 'wallPosts' && diff?.type === 'append') {
+    const students = (await redis.get('students')) || [];
+    await broadcastWallPost(students, diff.item.title, diff.item.content);
+    return;
+  }
+}
+
 export default async function handler(req, res) {
   const key = req.query.key;
 
@@ -124,10 +152,11 @@ export default async function handler(req, res) {
     }
     try {
       const { value } = req.body || {};
+      const needsDiff = key === 'bookings' || key === 'purchases' || key === 'wallPosts';
+      const current = needsDiff ? await redis.get(key) : undefined;
+      const diff = needsDiff ? diffSingleChange(current, value) : null;
 
       if (!admin && (key === 'bookings' || key === 'purchases')) {
-        const current = await redis.get(key);
-        const diff = diffSingleChange(current, value);
         const allowed = key === 'bookings' ? isBookingChangeAllowed(diff, current) : isPurchaseChangeAllowed(diff);
         if (!allowed) {
           return res.status(403).json({ error: 'Cambio no permitido' });
@@ -135,6 +164,16 @@ export default async function handler(req, res) {
       }
 
       await redis.set(key, value);
+
+      // Efectos secundarios de Brevo (sincronizar contactos / avisos por email).
+      // Se esperan (Vercel puede cortar el proceso justo después de responder),
+      // pero un fallo aquí no hace fallar la escritura ya confirmada.
+      try {
+        await runBrevoSideEffects(key, value, diff);
+      } catch (e) {
+        console.error('Brevo: error en efectos secundarios', e);
+      }
+
       return res.status(200).json({ ok: true });
     } catch (e) {
       return res.status(500).json({ error: 'Error escribiendo en Redis' });
