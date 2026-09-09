@@ -61,6 +61,7 @@ const BONOS = [
   { id: 'bono6', name: 'Bono 6', desc: '6 clases al mes · ≥2 días a la semana', price: 80, classes: 6 },
   { id: 'bono8', name: 'Bono 8', desc: '8 clases al mes · 2 días a la semana', price: 95, classes: 8 },
   { id: 'bono10', name: 'Bono 10', desc: '10 clases al mes', price: 105, classes: 10 },
+  { id: 'bono12', name: 'Bono 12', desc: '12 clases al mes', price: 120, classes: 12 },
   { id: 'ilimitado', name: 'Bono ilimitado', desc: 'Clases ilimitadas', price: 150, classes: null }
 ];
 const CLASE_SUELTA_PRECIO = 20;

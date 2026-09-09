@@ -2,7 +2,7 @@ import { Redis } from '@upstash/redis';
 
 const redis = Redis.fromEnv();
 const BREVO_API = 'https://api.brevo.com/v3';
-const BONO_NAMES = { bono4: 'Bono 4', bono6: 'Bono 6', bono8: 'Bono 8', bono10: 'Bono 10', ilimitado: 'Bono ilimitado' };
+const BONO_NAMES = { bono4: 'Bono 4', bono6: 'Bono 6', bono8: 'Bono 8', bono10: 'Bono 10', bono12: 'Bono 12', ilimitado: 'Bono ilimitado' };
 
 function enabled() {
   return !!process.env.BREVO_API_KEY;
