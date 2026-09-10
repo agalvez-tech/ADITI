@@ -5,8 +5,8 @@ import { payWithRedsys } from './redsys.js';
 import { registerServiceWorker, subscribeToPush, unsubscribeFromPush, getCurrentSubscription, pushSupported } from './push.js';
 import { uploadWallImage, deleteWallImage } from './upload.js';
 
-const DAYS_ORDER = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Domingo'];
-const DAY_INDEX = { Domingo: 0, Lunes: 1, Martes: 2, 'Miércoles': 3, Jueves: 4, Viernes: 5 };
+const DAY_INDEX = { Domingo: 0, Lunes: 1, Martes: 2, 'Miércoles': 3, Jueves: 4, Viernes: 5, Sábado: 6 };
+const WEEKDAY_LETTERS = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
 
 const SCHEDULE = {
   Lunes: [
@@ -61,7 +61,7 @@ const BONOS = [
   { id: 'bono6', name: 'Bono 6', desc: '6 clases al mes · ≥2 días a la semana', price: 80, classes: 6 },
   { id: 'bono8', name: 'Bono 8', desc: '8 clases al mes · 2 días a la semana', price: 95, classes: 8 },
   { id: 'bono10', name: 'Bono 10', desc: '10 clases al mes', price: 105, classes: 10 },
-  { id: 'bono12', name: 'Bono 12', desc: '12 clases al mes', price: 120, classes: 12 },
+  { id: 'bono12', name: 'Bono 12', desc: '12 clases al mes · 3 días a la semana', price: 120, classes: 12 },
   { id: 'ilimitado', name: 'Bono ilimitado', desc: 'Clases ilimitadas', price: 150, classes: null }
 ];
 const CLASE_SUELTA_PRECIO = 20;
@@ -71,23 +71,16 @@ const HOW_FOUND = ['Instagram', 'Facebook', 'Google', 'Recomendación de una ami
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 function isValidIntlPhone(phone) { return /^\+\d{8,15}$/.test((phone || '').replace(/\s/g, '')); }
-function todayDayName() {
-  const idx = new Date().getDay();
-  return Object.keys(DAY_INDEX).find(k => DAY_INDEX[k] === idx) || 'Lunes';
-}
 function fmtDate(d) { return d.toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' }); }
 function isoDate(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
-function nextDatesForDay(dayName, count) {
-  const targetIdx = DAY_INDEX[dayName];
-  const res = [];
-  for (let i = 0; i < 60 && res.length < count; i++) {
-    const cand = addDays(new Date(), i);
-    if (cand.getDay() === targetIdx) res.push(cand);
-  }
-  return res;
-}
+function addMonths(d, n) { return new Date(d.getFullYear(), d.getMonth() + n, 1); }
+function sameDate(a, b) { return isoDate(a) === isoDate(b); }
+function mondayIndex(d) { return (d.getDay() + 6) % 7; } // Lunes=0 ... Domingo=6
+function startOfWeekMonday(d) { return addDays(d, -mondayIndex(d)); }
+function dayNameForDate(d) { return Object.keys(DAY_INDEX).find(k => DAY_INDEX[k] === d.getDay()) || ''; }
 function bonoName(id) { const b = BONOS.find(x => x.id === id); return b ? b.name : id; }
+function capitalizeFirst(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 
 export default function App() {
   const [loading, setLoading] = useState(true);
@@ -100,7 +93,6 @@ export default function App() {
   const [me, setMe] = useState(null);
   const [adminToken, setAdminToken] = useState(() => localStorage.getItem('aditi_admin_token') || null);
   const [isAdmin, setIsAdmin] = useState(() => !!localStorage.getItem('aditi_admin_token'));
-  const [selectedDay, setSelectedDay] = useState(todayDayName());
   const [adminTab, setAdminTab] = useState('alumnas');
   const [toastMsg, setToastMsg] = useState(null);
   const [modal, setModal] = useState(null);
@@ -186,8 +178,8 @@ export default function App() {
           <MuroTab wallPosts={wallPosts} />
         ) : tab === 'horario' ? (
           <HorarioTab
-            selectedDay={selectedDay} setSelectedDay={setSelectedDay}
-            onPickClass={(day, cls) => setModal({ type: 'booking', day, cls, dateIso: null, path: null })}
+            bookings={bookings}
+            onPickClass={(cls, dateIso, day) => setModal({ type: 'booking', day, cls, dateIso })}
           />
         ) : tab === 'bonos' ? (
           <BonosTab me={me} activePurchaseFor={activePurchaseFor} purchases={purchases}
@@ -214,7 +206,7 @@ export default function App() {
       {toastMsg && <div className="toast">{toastMsg}</div>}
       {modal && modal.type === 'booking' && (
         <BookingModal
-          modal={modal} setModal={setModal}
+          modal={modal}
           bookings={bookings} saveBookings={saveBookings} purchases={purchases} savePurchases={savePurchases}
           me={me} myId={myId} pickProfile={pickProfile} activePurchaseFor={activePurchaseFor}
           toast={toast} onClose={() => setModal(null)}
@@ -293,27 +285,91 @@ function MuroTab({ wallPosts }) {
 }
 
 /* ---------------- HORARIO ---------------- */
-function HorarioTab({ selectedDay, setSelectedDay, onPickClass }) {
-  const classes = SCHEDULE[selectedDay] || [];
+function HorarioTab({ bookings, onPickClass }) {
+  const [weekStart, setWeekStart] = useState(() => startOfWeekMonday(new Date()));
+  const [monthCursor, setMonthCursor] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+
+  const weekDates = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+  const isCurrentWeek = sameDate(weekStart, startOfWeekMonday(new Date()));
+
   return (
     <>
-      <div className="daychips">
-        {DAYS_ORDER.map(d => (
-          <div key={d} className={`chip ${selectedDay === d ? 'active' : ''}`} onClick={() => setSelectedDay(d)}>{d}</div>
-        ))}
+      <MiniMonthCalendar
+        monthCursor={monthCursor} setMonthCursor={setMonthCursor} weekStart={weekStart}
+        onPickDate={(date) => setWeekStart(startOfWeekMonday(date))}
+      />
+      <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between', margin: '18px 0 10px' }}>
+        <button className="btn btn-outline btn-sm" onClick={() => setWeekStart(addDays(weekStart, -7))}>← Semana anterior</button>
+        {!isCurrentWeek && <button className="linklike" onClick={() => setWeekStart(startOfWeekMonday(new Date()))}>Ir a hoy</button>}
+        <button className="btn btn-outline btn-sm" onClick={() => setWeekStart(addDays(weekStart, 7))}>Siguiente →</button>
       </div>
-      {classes.length === 0 ? (
-        <div className="empty">No hay clases programadas este día.</div>
-      ) : classes.map((c, idx) => (
-        <div className="classcard" key={idx} onClick={() => onPickClass(selectedDay, c)}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
-            <div className="time">{c.time}</div>
-            <div className="name">{c.name}</div>
+      {weekDates.map(date => {
+        const dayName = dayNameForDate(date);
+        const classes = SCHEDULE[dayName] || [];
+        const dateIso = isoDate(date);
+        const isToday = sameDate(date, new Date());
+        return (
+          <div key={dateIso} style={{ marginBottom: 18 }}>
+            <div className="sectionlabel" style={{ margin: '0 0 8px', textTransform: 'none' }}>
+              {dayName} {date.getDate()} {isToday && <span className="pill pill-lav" style={{ marginLeft: 6 }}>Hoy</span>}
+            </div>
+            {classes.length === 0 ? (
+              <div className="muted" style={{ padding: '4px 0 8px' }}>Sin clases este día.</div>
+            ) : classes.map((c, idx) => {
+              const attendees = bookings.filter(b => b.date === dateIso && b.time === c.time && b.className === c.name && b.status !== 'cancelada').length;
+              const full = attendees >= CLASS_CAPACITY;
+              return (
+                <div className="classcard" key={idx} onClick={() => onPickClass(c, dateIso, dayName)}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
+                    <div className="time">{c.time}</div>
+                    <div className="name">{c.name}</div>
+                  </div>
+                  <span className={`pill ${full ? 'pill-gray' : (CLASS_STYLE[c.name] || 'pill-lav')}`}>{full ? 'Completo' : 'Reservar'}</span>
+                </div>
+              );
+            })}
           </div>
-          <span className={`pill ${CLASS_STYLE[c.name] || 'pill-gray'}`}>Reservar</span>
-        </div>
-      ))}
+        );
+      })}
     </>
+  );
+}
+
+function MiniMonthCalendar({ monthCursor, setMonthCursor, weekStart, onPickDate }) {
+  const month = monthCursor.getMonth();
+  const gridStart = startOfWeekMonday(new Date(monthCursor.getFullYear(), month, 1));
+  const days = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
+  const weekDates = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+  const today = new Date();
+
+  return (
+    <div className="card">
+      <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, flexWrap: 'nowrap' }}>
+        <button className="linklike" style={{ fontSize: 18, textDecoration: 'none' }} onClick={() => setMonthCursor(addMonths(monthCursor, -1))}>‹</button>
+        <b style={{ fontSize: 13.5 }}>{capitalizeFirst(monthCursor.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }))}</b>
+        <button className="linklike" style={{ fontSize: 18, textDecoration: 'none' }} onClick={() => setMonthCursor(addMonths(monthCursor, 1))}>›</button>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 4, textAlign: 'center' }}>
+        {WEEKDAY_LETTERS.map(l => <div key={l} className="muted" style={{ fontSize: 11, fontWeight: 600 }}>{l}</div>)}
+        {days.map(d => {
+          const inMonth = d.getMonth() === month;
+          const inWeek = weekDates.some(w => sameDate(w, d));
+          const isToday = sameDate(d, today);
+          return (
+            <div key={isoDate(d)} onClick={() => onPickDate(d)}
+              style={{
+                padding: '6px 0', borderRadius: 8, cursor: 'pointer', fontSize: 12.5,
+                opacity: inMonth ? 1 : 0.32,
+                background: inWeek ? 'var(--lav-pale)' : 'transparent',
+                fontWeight: isToday ? 700 : 400,
+                color: isToday ? 'var(--plum)' : 'var(--ink)'
+              }}>
+              {d.getDate()}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -842,9 +898,8 @@ function AdminMuro({ wallPosts, saveWallPosts, adminToken, toast }) {
 }
 
 /* ---------------- MODALES ---------------- */
-function BookingModal({ modal, setModal, bookings, saveBookings, purchases, savePurchases, me, pickProfile, activePurchaseFor, toast, onClose }) {
+function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases, me, pickProfile, activePurchaseFor, toast, onClose }) {
   const { day, cls, dateIso } = modal;
-  const dates = nextDatesForDay(day, 4);
 
   function confirmBookingWithBono(purchaseId) {
     const next = purchases.map(p => p.id === purchaseId ? { ...p, classesUsed: (p.classesUsed || 0) + (p.classesTotal === null ? 0 : 1) } : p);
@@ -926,15 +981,7 @@ function BookingModal({ modal, setModal, bookings, saveBookings, purchases, save
       <div className="modal-sheet">
         <button className="modal-close" onClick={onClose}>×</button>
         <h3>{cls.name} · {cls.time}</h3>
-        <p className="muted">Elige la fecha en la que quieres asistir.</p>
-        {dates.map(d => {
-          const iso = isoDate(d);
-          const dateFull = bookings.filter(b => b.date === iso && b.time === cls.time && b.className === cls.name && b.status !== 'cancelada').length >= CLASS_CAPACITY;
-          return (
-            <button key={iso} className={`datebtn ${dateIso === iso ? 'selected' : ''}`}
-              onClick={() => setModal({ ...modal, dateIso: iso })}>{fmtDate(d)}{dateFull ? ' · Completo' : ''}</button>
-          );
-        })}
+        <p className="muted">{fmtDate(new Date(dateIso))}</p>
         {step2}
       </div>
     </div>
