@@ -19,7 +19,8 @@ export async function confirmPaymentFromParams(params) {
       let confirmed = null;
       const next = purchases.map(p => {
         if (p.id !== itemId) return p;
-        confirmed = { ...p, status: 'confirmado', paymentMethod: 'redsys', expiryDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString() };
+        const termDays = p.trimestre ? 90 : 30;
+        confirmed = { ...p, status: 'confirmado', paymentMethod: 'redsys', expiryDate: new Date(Date.now() + termDays * 24 * 60 * 60 * 1000).toISOString() };
         return confirmed;
       });
       await redis.set('purchases', next);

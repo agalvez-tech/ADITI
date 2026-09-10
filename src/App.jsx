@@ -64,6 +64,17 @@ const BONOS = [
   { id: 'bono12', name: 'Bono 12', desc: '12 clases al mes · 3 días a la semana', price: 120, classes: 12 },
   { id: 'ilimitado', name: 'Bono ilimitado', desc: 'Clases ilimitadas', price: 150, classes: null }
 ];
+// Pago único de 3 meses para cada bono (precio total e importe que se ahorra
+// frente a pagar 3 meses sueltos). El de bono12 es una estimación a falta de
+// confirmar el precio oficial (no salía en el folleto de trimestres).
+const BONO_TRIMESTRE = {
+  bono4: { price: 165, ahorro: 15 },
+  bono6: { price: 220, ahorro: 20 },
+  bono8: { price: 260, ahorro: 25 },
+  bono10: { price: 285, ahorro: 30 },
+  bono12: { price: 325, ahorro: 35 },
+  ilimitado: { price: 405, ahorro: 45 }
+};
 const CLASE_SUELTA_PRECIO = 20;
 const CLASS_CAPACITY = 8;
 const BIZUM_PHONE = '691750534';
@@ -183,9 +194,9 @@ export default function App() {
           />
         ) : tab === 'bonos' ? (
           <BonosTab me={me} activePurchaseFor={activePurchaseFor} purchases={purchases}
-            onRequestBono={(bono) => {
+            onRequestBono={(bono, trimestre) => {
               if (!me) { toast('Completa tu perfil antes de solicitar un bono'); setTab('perfil'); return; }
-              setModal({ type: 'bono', bono });
+              setModal({ type: 'bono', bono, trimestre });
             }} />
         ) : tab === 'perfil' ? (
           <PerfilTab me={me} pickProfile={pickProfile} clearProfile={clearProfile}
@@ -389,27 +400,44 @@ function BonosTab({ me, activePurchaseFor, purchases, onRequestBono }) {
           <div className="sectionlabel">Tu bono actual</div>
           {active ? (
             <div className="card">
-              <h3>{bonoName(active.bonoId)}</h3>
+              <h3>{bonoName(active.bonoId)}{active.trimestre && ' · Trimestre'}</h3>
               <p className="muted">Clases disponibles: <b>{active.classesTotal === null ? 'Ilimitadas' : `${active.classesTotal - active.classesUsed} de ${active.classesTotal}`}</b></p>
               <p className="muted">Válido hasta {fmtDate(new Date(active.expiryDate))}</p>
             </div>
           ) : pendiente ? (
-            <div className="card"><h3>{bonoName(pendiente.bonoId)}</h3><p className="muted">Solicitado, pendiente de confirmar el pago con Beatriz.</p></div>
+            <div className="card"><h3>{bonoName(pendiente.bonoId)}{pendiente.trimestre && ' · Trimestre'}</h3><p className="muted">Solicitado, pendiente de confirmar el pago con Beatriz.</p></div>
           ) : (
             <div className="empty">No tienes ningún bono activo ahora mismo.</div>
           )}
         </>
       )}
       <div className="sectionlabel">Elige un bono</div>
-      {BONOS.map(b => (
-        <div className="card" key={b.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div><h3>{b.name}</h3><p className="muted">{b.desc}</p></div>
-          <div style={{ textAlign: 'right' }}>
-            <div className="serif" style={{ fontSize: 19, fontWeight: 600, color: 'var(--plum)' }}>{b.price}€</div>
-            <button className="btn btn-sage btn-sm" style={{ marginTop: 6 }} onClick={() => onRequestBono(b)}>Solicitar</button>
+      {BONOS.map(b => {
+        const tri = BONO_TRIMESTRE[b.id];
+        return (
+          <div className="card" key={b.id}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div><h3>{b.name}</h3><p className="muted">{b.desc}</p></div>
+              <div style={{ textAlign: 'right' }}>
+                <div className="serif" style={{ fontSize: 19, fontWeight: 600, color: 'var(--plum)' }}>{b.price}€/mes</div>
+                <button className="btn btn-sage btn-sm" style={{ marginTop: 6 }} onClick={() => onRequestBono(b, false)}>Solicitar</button>
+              </div>
+            </div>
+            {tri && (
+              <>
+                <hr className="sep" style={{ margin: '10px 0' }} />
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <p className="muted" style={{ margin: 0 }}>Trimestre (3 meses) · ahorras {tri.ahorro}€</p>
+                  <div style={{ textAlign: 'right', display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div className="serif" style={{ fontSize: 16, fontWeight: 600, color: 'var(--plum)' }}>{tri.price}€</div>
+                    <button className="btn btn-outline btn-sm" onClick={() => onRequestBono(b, true)}>Solicitar</button>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
-        </div>
-      ))}
+        );
+      })}
       <div className="card" style={{ background: 'var(--peach-pale)', borderColor: 'var(--peach)' }}>
         <h3 style={{ color: '#8A4128' }}>Clase suelta</h3>
         <p className="muted">Si no tienes bono, puedes reservar una clase individual por {CLASE_SUELTA_PRECIO}€ desde la pestaña Reservar.</p>
@@ -515,12 +543,12 @@ function MyBonoCard({ me, purchases, activePurchaseFor }) {
       <h3>Mi bono</h3>
       {active ? (
         <>
-          <p className="muted">{bonoName(active.bonoId)}</p>
+          <p className="muted">{bonoName(active.bonoId)}{active.trimestre && ' · Trimestre'}</p>
           <p className="muted">Clases disponibles: <b>{active.classesTotal === null ? 'Ilimitadas' : `${active.classesTotal - active.classesUsed} de ${active.classesTotal}`}</b></p>
           <p className="muted">Válido hasta {fmtDate(new Date(active.expiryDate))}</p>
         </>
       ) : (
-        <p className="muted">{bonoName(pendiente.bonoId)} · solicitado, pendiente de confirmar el pago.</p>
+        <p className="muted">{bonoName(pendiente.bonoId)}{pendiente.trimestre && ' · Trimestre'} · solicitado, pendiente de confirmar el pago.</p>
       )}
     </div>
   );
@@ -697,11 +725,11 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
               const s = students.find(x => x.id === p.studentId);
               return (
                 <div className="card" key={p.id}>
-                  <h3>{bonoName(p.bonoId)} <span className="pill pill-lav">{p.paymentMethod === 'redsys' ? 'Tarjeta' : 'Bizum'}</span></h3>
+                  <h3>{bonoName(p.bonoId)}{p.trimestre && ' · Trimestre'} <span className="pill pill-lav">{p.paymentMethod === 'redsys' ? 'Tarjeta' : 'Bizum'}</span></h3>
                   <p className="muted">{s ? s.name : 'Alumna eliminada'} · {s ? s.phone : ''}</p>
                   <p className="muted">Solicitado el {fmtDate(new Date(p.purchaseDate))}</p>
                   <button className="btn btn-sage btn-sm" style={{ marginTop: 8 }} onClick={() => {
-                    const next = purchases.map(x => x.id === p.id ? { ...x, status: 'confirmado', expiryDate: addDays(new Date(), 30).toISOString() } : x);
+                    const next = purchases.map(x => x.id === p.id ? { ...x, status: 'confirmado', expiryDate: addDays(new Date(), p.trimestre ? 90 : 30).toISOString() } : x);
                     savePurchases(next);
                     toast('Bono confirmado');
                   }}>Marcar como pagado</button>
@@ -737,7 +765,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
                 const vencido = new Date(p.expiryDate) < new Date();
                 return (
                   <div className="card" key={p.id}>
-                    <h3>{bonoName(p.bonoId)} <span className="pill pill-lav">{p.paymentMethod === 'redsys' ? 'Tarjeta' : 'Bizum'}</span></h3>
+                    <h3>{bonoName(p.bonoId)}{p.trimestre && ' · Trimestre'} <span className="pill pill-lav">{p.paymentMethod === 'redsys' ? 'Tarjeta' : 'Bizum'}</span></h3>
                     <p className="muted">{s ? s.name : 'Alumna eliminada'} · {s ? s.phone : ''}</p>
                     <p className="muted">Clases: <b>{p.classesTotal === null ? 'Ilimitadas' : `${p.classesUsed || 0} de ${p.classesTotal} usadas`}</b></p>
                     <div className="row" style={{ marginTop: 8 }}>
@@ -1058,13 +1086,19 @@ function NoProfileBookingStep({ dateIso, pickProfile, toast, onConfirmPuntual, o
 
 function BonoModal({ modal, me, purchases, savePurchases, toast, onClose }) {
   const b = modal.bono;
+  const trimestre = !!modal.trimestre;
+  const tri = BONO_TRIMESTRE[b.id];
+  const price = trimestre && tri ? tri.price : b.price;
+  const classesTotal = b.classes === null ? null : (trimestre ? b.classes * 3 : b.classes);
+  const termDays = trimestre ? 90 : 30;
+  const label = trimestre ? `${b.name} · Trimestre` : b.name;
   const [paying, setPaying] = useState(false);
 
   function createPendingPurchase(paymentMethod) {
     const purchase = {
-      id: uid(), studentId: me.id, bonoId: b.id, price: b.price,
-      classesTotal: b.classes === null ? null : b.classes, classesUsed: 0,
-      status: 'pendiente', paymentMethod, purchaseDate: new Date().toISOString(), expiryDate: addDays(new Date(), 30).toISOString()
+      id: uid(), studentId: me.id, bonoId: b.id, price, trimestre,
+      classesTotal, classesUsed: 0,
+      status: 'pendiente', paymentMethod, purchaseDate: new Date().toISOString(), expiryDate: addDays(new Date(), termDays).toISOString()
     };
     savePurchases([...purchases, purchase]);
     return purchase;
@@ -1074,7 +1108,7 @@ function BonoModal({ modal, me, purchases, savePurchases, toast, onClose }) {
     setPaying(true);
     const purchase = createPendingPurchase('redsys');
     try {
-      await payWithRedsys({ kind: 'bono', itemId: purchase.id, studentId: me.id, amount: b.price, concept: b.name });
+      await payWithRedsys({ kind: 'bono', itemId: purchase.id, studentId: me.id, amount: price, concept: label });
     } catch (e) {
       setPaying(false);
       toast('No se pudo iniciar el pago con tarjeta. Puedes pagar por Bizum.');
@@ -1085,8 +1119,8 @@ function BonoModal({ modal, me, purchases, savePurchases, toast, onClose }) {
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal-sheet">
         <button className="modal-close" onClick={onClose}>×</button>
-        <h3>{b.name}</h3>
-        <p className="muted">{b.desc} · <b>{b.price}€</b></p>
+        <h3>{label}</h3>
+        <p className="muted">{b.desc}{trimestre && ' · pago único de 3 meses'} · <b>{price}€</b></p>
         <button className="btn btn-primary" style={{ marginTop: 14 }} disabled={paying} onClick={handleCardPayment}>
           {paying ? 'Redirigiendo a la pasarela…' : 'Pagar con tarjeta ahora'}
         </button>

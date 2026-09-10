@@ -79,7 +79,7 @@ export async function notifyBonoConfirmado(student, purchase) {
   if (!student) return;
   const purchases = (await redis.get('purchases')) || [];
   await syncStudentContact(student, purchases);
-  const bonoLabel = BONO_NAMES[purchase.bonoId] || purchase.bonoId;
+  const bonoLabel = (BONO_NAMES[purchase.bonoId] || purchase.bonoId) + (purchase.trimestre ? ' (trimestre)' : '');
   await sendEmail(
     student.email,
     '¡Tu bono de Aditi ya está activo!',
