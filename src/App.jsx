@@ -691,6 +691,7 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, toast }) {
 }
 
 function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, activePurchaseFor, adminToken, savePurchases, saveBookings, saveWallPosts, toast }) {
+  const [alumnaSearch, setAlumnaSearch] = useState('');
   const tabs = [
     { id: 'resumen', label: 'Resumen del día' },
     { id: 'alumnas', label: 'Alumnas' },
@@ -710,12 +711,25 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
         <AdminResumen students={students} bookings={bookings} saveBookings={saveBookings} toast={toast} />
       )}
       {adminTab === 'alumnas' && (
-        students.length === 0 ? <div className="empty">Todavía no hay alumnas registradas.</div> :
-        [...students].sort((a, b) => a.name.localeCompare(b.name)).map(s => (
-          <AdminAlumnaCard key={s.id} s={s} students={students} saveStudents={saveStudents}
-            active={activePurchaseFor(s.id)} total={bookings.filter(b => b.studentId === s.id).length}
-            toast={toast} />
-        ))
+        <>
+          <input type="text" value={alumnaSearch} onChange={e => setAlumnaSearch(e.target.value)}
+            placeholder="Buscar por nombre, teléfono o email…" style={{ marginBottom: 14 }} />
+          {(() => {
+            const q = alumnaSearch.trim().toLowerCase();
+            const filtered = !q ? students : students.filter(s =>
+              (s.name || '').toLowerCase().includes(q) ||
+              (s.phone || '').toLowerCase().includes(q) ||
+              (s.email || '').toLowerCase().includes(q)
+            );
+            if (students.length === 0) return <div className="empty">Todavía no hay alumnas registradas.</div>;
+            if (filtered.length === 0) return <div className="empty">No hay ninguna alumna que coincida con "{alumnaSearch}".</div>;
+            return [...filtered].sort((a, b) => a.name.localeCompare(b.name)).map(s => (
+              <AdminAlumnaCard key={s.id} s={s} students={students} saveStudents={saveStudents}
+                active={activePurchaseFor(s.id)} total={bookings.filter(b => b.studentId === s.id).length}
+                toast={toast} />
+            ));
+          })()}
+        </>
       )}
       {adminTab === 'bonospend' && (
         <>
@@ -728,11 +742,18 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
                   <h3>{bonoName(p.bonoId)}{p.trimestre && ' · Trimestre'} <span className="pill pill-lav">{p.paymentMethod === 'redsys' ? 'Tarjeta' : 'Bizum'}</span></h3>
                   <p className="muted">{s ? s.name : 'Alumna eliminada'} · {s ? s.phone : ''}</p>
                   <p className="muted">Solicitado el {fmtDate(new Date(p.purchaseDate))}</p>
-                  <button className="btn btn-sage btn-sm" style={{ marginTop: 8 }} onClick={() => {
-                    const next = purchases.map(x => x.id === p.id ? { ...x, status: 'confirmado', expiryDate: addDays(new Date(), p.trimestre ? 90 : 30).toISOString() } : x);
-                    savePurchases(next);
-                    toast('Bono confirmado');
-                  }}>Marcar como pagado</button>
+                  <div className="row" style={{ marginTop: 8 }}>
+                    <button className="btn btn-sage btn-sm" onClick={() => {
+                      const next = purchases.map(x => x.id === p.id ? { ...x, status: 'confirmado', expiryDate: addDays(new Date(), p.trimestre ? 90 : 30).toISOString() } : x);
+                      savePurchases(next);
+                      toast('Bono confirmado');
+                    }}>Marcar como pagado</button>
+                    <button className="btn btn-outline btn-sm" onClick={() => {
+                      if (!confirm(`¿Cancelar la solicitud de ${bonoName(p.bonoId)} de ${s ? s.name : 'esta alumna'}?`)) return;
+                      savePurchases(purchases.map(x => x.id === p.id ? { ...x, status: 'cancelado' } : x));
+                      toast('Solicitud cancelada');
+                    }}>Cancelar</button>
+                  </div>
                 </div>
               );
             })}
@@ -744,11 +765,18 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
                 <div className="card" key={b.id}>
                   <h3>{b.className} <span className="pill pill-lav">{b.paymentMethod === 'redsys' ? 'Tarjeta' : 'Bizum'}</span></h3>
                   <p className="muted">{s ? s.name : 'Alumna eliminada'} · {fmtDate(new Date(b.date))} {b.time}</p>
-                  <button className="btn btn-sage btn-sm" style={{ marginTop: 8 }} onClick={() => {
-                    const next = bookings.map(x => x.id === b.id ? { ...x, status: 'confirmada' } : x);
-                    saveBookings(next);
-                    toast('Clase suelta confirmada');
-                  }}>Marcar como pagada</button>
+                  <div className="row" style={{ marginTop: 8 }}>
+                    <button className="btn btn-sage btn-sm" onClick={() => {
+                      const next = bookings.map(x => x.id === b.id ? { ...x, status: 'confirmada' } : x);
+                      saveBookings(next);
+                      toast('Clase suelta confirmada');
+                    }}>Marcar como pagada</button>
+                    <button className="btn btn-outline btn-sm" onClick={() => {
+                      if (!confirm(`¿Cancelar la reserva de ${s ? s.name : 'esta alumna'}?`)) return;
+                      saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'cancelada' } : x));
+                      toast('Reserva cancelada');
+                    }}>Cancelar</button>
+                  </div>
                 </div>
               );
             })}
@@ -768,8 +796,13 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
                     <h3>{bonoName(p.bonoId)}{p.trimestre && ' · Trimestre'} <span className="pill pill-lav">{p.paymentMethod === 'redsys' ? 'Tarjeta' : 'Bizum'}</span></h3>
                     <p className="muted">{s ? s.name : 'Alumna eliminada'} · {s ? s.phone : ''}</p>
                     <p className="muted">Clases: <b>{p.classesTotal === null ? 'Ilimitadas' : `${p.classesUsed || 0} de ${p.classesTotal} usadas`}</b></p>
-                    <div className="row" style={{ marginTop: 8 }}>
+                    <div className="row" style={{ marginTop: 8, alignItems: 'center' }}>
                       <span className={`pill ${vencido ? 'pill-gray' : 'pill-sage'}`}>{vencido ? 'Caducado' : `Válido hasta ${fmtDate(new Date(p.expiryDate))}`}</span>
+                      <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => {
+                        if (!confirm(`¿Cancelar el bono ${bonoName(p.bonoId)} de ${s ? s.name : 'esta alumna'}? Dejará de estar activo.`)) return;
+                        savePurchases(purchases.map(x => x.id === p.id ? { ...x, status: 'cancelado' } : x));
+                        toast('Bono cancelado');
+                      }}>Cancelar bono</button>
                     </div>
                   </div>
                 );
@@ -784,6 +817,11 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
                   <div className="card" key={b.id}>
                     <h3>{b.className} <span className="pill pill-lav">{b.paymentMethod === 'redsys' ? 'Tarjeta' : 'Bizum'}</span></h3>
                     <p className="muted">{s ? s.name : 'Alumna eliminada'} · {fmtDate(new Date(b.date))} {b.time}</p>
+                    <button className="linklike" style={{ color: 'var(--danger)', marginTop: 6 }} onClick={() => {
+                      if (!confirm(`¿Cancelar esta clase de ${s ? s.name : 'esta alumna'}?`)) return;
+                      saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'cancelada' } : x));
+                      toast('Clase cancelada');
+                    }}>Cancelar</button>
                   </div>
                 );
               })}

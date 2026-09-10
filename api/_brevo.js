@@ -104,10 +104,12 @@ export async function notifySueltaConfirmada(student, booking) {
 // Aviso por email cuando Beatriz publica algo en el Muro (además del push).
 // Cada alumna recibe su propio email individual, nunca se exponen las
 // direcciones de las demás.
-export async function broadcastWallPost(students, title, content) {
+export async function broadcastWallPost(students, title, content, imageUrl) {
   if (!enabled()) return;
   const emails = (students || []).map(s => s.email).filter(Boolean);
+  const imageHtml = imageUrl ? `<p><img src="${imageUrl}" alt="" style="max-width:100%;border-radius:8px;"></p>` : '';
+  const html = `${imageHtml}<p>${content}</p><p>— Aditi Functional Yoga</p>`;
   await Promise.allSettled(
-    emails.map(email => sendEmail(email, `Aditi: ${title}`, `<p>${content}</p><p>— Aditi Functional Yoga</p>`))
+    emails.map(email => sendEmail(email, `Aditi: ${title}`, html))
   );
 }

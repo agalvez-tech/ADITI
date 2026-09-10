@@ -112,6 +112,14 @@ async function runBrevoSideEffects(key, value, diff) {
     await notifyBonoConfirmado(student, diff.after);
     return;
   }
+  if (key === 'purchases' && diff?.type === 'modify' && diff.before.status !== diff.after.status) {
+    // Cualquier otro cambio de estado (ej. cancelar un bono confirmado) resincroniza
+    // la lista de Brevo de la alumna, sin mandar el email de "bono confirmado".
+    const students = (await redis.get('students')) || [];
+    const student = students.find(s => s.id === diff.after.studentId);
+    if (student) await syncStudentContact(student, value);
+    return;
+  }
   if (key === 'bookings' && diff?.type === 'modify' && diff.before.status === 'pendiente_pago' && diff.after.status === 'confirmada') {
     const students = (await redis.get('students')) || [];
     const student = students.find(s => s.id === diff.after.studentId);
@@ -120,7 +128,7 @@ async function runBrevoSideEffects(key, value, diff) {
   }
   if (key === 'wallPosts' && diff?.type === 'append') {
     const students = (await redis.get('students')) || [];
-    await broadcastWallPost(students, diff.item.title, diff.item.content);
+    await broadcastWallPost(students, diff.item.title, diff.item.content, diff.item.imageUrl);
     return;
   }
 }
