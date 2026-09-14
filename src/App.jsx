@@ -8,7 +8,7 @@ import { uploadWallImage, deleteWallImage } from './upload.js';
 const DAY_INDEX = { Domingo: 0, Lunes: 1, Martes: 2, 'Miércoles': 3, Jueves: 4, Viernes: 5, Sábado: 6 };
 const WEEKDAY_LETTERS = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
 
-const SCHEDULE = {
+const DEFAULT_SCHEDULE = {
   Lunes: [
     { time: '08:00', name: 'Balance Yoga' },
     { time: '09:15', name: 'Entrenamiento Funcional' },
@@ -56,7 +56,7 @@ const CLASS_STYLE = {
   'Fuerza y Core': 'pill-gray'
 };
 
-const BONOS = [
+const DEFAULT_BONOS = [
   { id: 'bono4', name: 'Bono 4', desc: '4 clases al mes · 1 día a la semana', price: 60, classes: 4 },
   { id: 'bono6', name: 'Bono 6', desc: '6 clases al mes · ≥2 días a la semana', price: 80, classes: 6 },
   { id: 'bono8', name: 'Bono 8', desc: '8 clases al mes · 2 días a la semana', price: 95, classes: 8 },
@@ -90,7 +90,7 @@ function sameDate(a, b) { return isoDate(a) === isoDate(b); }
 function mondayIndex(d) { return (d.getDay() + 6) % 7; } // Lunes=0 ... Domingo=6
 function startOfWeekMonday(d) { return addDays(d, -mondayIndex(d)); }
 function dayNameForDate(d) { return Object.keys(DAY_INDEX).find(k => DAY_INDEX[k] === d.getDay()) || ''; }
-function bonoName(id) { const b = BONOS.find(x => x.id === id); return b ? b.name : id; }
+function bonoName(bonos, id) { const b = (bonos || DEFAULT_BONOS).find(x => x.id === id); return b ? b.name : id; }
 function capitalizeFirst(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 
 export default function App() {
@@ -100,6 +100,8 @@ export default function App() {
   const [bookings, setBookings] = useState([]);
   const [purchases, setPurchases] = useState([]);
   const [wallPosts, setWallPosts] = useState([]);
+  const [schedule, setSchedule] = useState(DEFAULT_SCHEDULE);
+  const [bonos, setBonos] = useState(DEFAULT_BONOS);
   const [myId, setMyId] = useState(() => localStorage.getItem('aditi_myId') || null);
   const [me, setMe] = useState(null);
   const [adminToken, setAdminToken] = useState(() => localStorage.getItem('aditi_admin_token') || null);
@@ -118,13 +120,16 @@ export default function App() {
     function loadAll() {
       return Promise.all([
         isAdmin ? getData('students', adminToken) : Promise.resolve(null),
-        getData('bookings'), getData('purchases'), getData('wallPosts')
-      ]).then(([s, b, p, w]) => {
+        getData('bookings'), getData('purchases'), getData('wallPosts'),
+        getData('schedule'), getData('bonos')
+      ]).then(([s, b, p, w, sch, bo]) => {
         if (cancelled) return;
         if (isAdmin) setStudents(s || []);
         setBookings(b || []);
         setPurchases(p || []);
         setWallPosts(w || []);
+        if (sch) setSchedule(sch);
+        if (bo) setBonos(bo);
         setLoading(false);
       }).catch(() => { if (!cancelled) setLoading(false); });
     }
@@ -154,6 +159,8 @@ export default function App() {
   function saveBookings(next) { setBookings(next); setData('bookings', next, adminToken); }
   function savePurchases(next) { setPurchases(next); setData('purchases', next, adminToken); }
   function saveWallPosts(next) { setWallPosts(next); setData('wallPosts', next, adminToken); }
+  function saveSchedule(next) { setSchedule(next); setData('schedule', next, adminToken); }
+  function saveBonos(next) { setBonos(next); setData('bonos', next, adminToken); }
   function pickProfile(id) { setMyId(id); localStorage.setItem('aditi_myId', id); }
   function clearProfile() { setMyId(null); localStorage.removeItem('aditi_myId'); }
 
@@ -189,23 +196,24 @@ export default function App() {
           <MuroTab wallPosts={wallPosts} />
         ) : tab === 'horario' ? (
           <HorarioTab
-            bookings={bookings}
+            bookings={bookings} schedule={schedule}
             onPickClass={(cls, dateIso, day) => setModal({ type: 'booking', day, cls, dateIso })}
           />
         ) : tab === 'bonos' ? (
-          <BonosTab me={me} activePurchaseFor={activePurchaseFor} purchases={purchases}
+          <BonosTab me={me} activePurchaseFor={activePurchaseFor} purchases={purchases} bonos={bonos}
             onRequestBono={(bono, trimestre) => {
               if (!me) { toast('Completa tu perfil antes de solicitar un bono'); setTab('perfil'); return; }
               setModal({ type: 'bono', bono, trimestre });
             }} />
         ) : tab === 'perfil' ? (
-          <PerfilTab me={me} pickProfile={pickProfile} clearProfile={clearProfile}
+          <PerfilTab me={me} pickProfile={pickProfile} clearProfile={clearProfile} bonos={bonos}
             purchases={purchases} bookings={bookings} activePurchaseFor={activePurchaseFor}
             isAdmin={isAdmin} onAdminLogin={loginAdmin} onAdminLogout={logoutAdmin} setTab={setTab} toast={toast} />
         ) : tab === 'admin' ? (
           <AdminTab adminTab={adminTab} setAdminTab={setAdminTab}
             students={students} saveStudents={saveStudents} bookings={bookings} purchases={purchases} wallPosts={wallPosts}
             activePurchaseFor={activePurchaseFor} adminToken={adminToken}
+            schedule={schedule} saveSchedule={saveSchedule} bonos={bonos} saveBonos={saveBonos}
             savePurchases={savePurchases} saveBookings={saveBookings} saveWallPosts={saveWallPosts}
             toast={toast} />
         ) : null}
@@ -217,7 +225,7 @@ export default function App() {
       {toastMsg && <div className="toast">{toastMsg}</div>}
       {modal && modal.type === 'booking' && (
         <BookingModal
-          modal={modal}
+          modal={modal} bonos={bonos}
           bookings={bookings} saveBookings={saveBookings} purchases={purchases} savePurchases={savePurchases}
           me={me} myId={myId} pickProfile={pickProfile} activePurchaseFor={activePurchaseFor}
           toast={toast} onClose={() => setModal(null)}
@@ -296,7 +304,7 @@ function MuroTab({ wallPosts }) {
 }
 
 /* ---------------- HORARIO ---------------- */
-function HorarioTab({ bookings, onPickClass }) {
+function HorarioTab({ bookings, schedule, onPickClass }) {
   const [weekStart, setWeekStart] = useState(() => startOfWeekMonday(new Date()));
   const [monthCursor, setMonthCursor] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
 
@@ -316,7 +324,7 @@ function HorarioTab({ bookings, onPickClass }) {
       </div>
       {weekDates.map(date => {
         const dayName = dayNameForDate(date);
-        const classes = SCHEDULE[dayName] || [];
+        const classes = schedule[dayName] || [];
         const dateIso = isoDate(date);
         const isToday = sameDate(date, new Date());
         return (
@@ -385,7 +393,7 @@ function MiniMonthCalendar({ monthCursor, setMonthCursor, weekStart, onPickDate 
 }
 
 /* ---------------- BONOS ---------------- */
-function BonosTab({ me, activePurchaseFor, purchases, onRequestBono }) {
+function BonosTab({ me, activePurchaseFor, purchases, bonos, onRequestBono }) {
   const active = me ? activePurchaseFor(me.id) : null;
   const pendiente = me ? purchases.filter(p => p.studentId === me.id && p.status === 'pendiente').sort((a, b) => new Date(b.purchaseDate) - new Date(a.purchaseDate))[0] : null;
   return (
@@ -400,19 +408,19 @@ function BonosTab({ me, activePurchaseFor, purchases, onRequestBono }) {
           <div className="sectionlabel">Tu bono actual</div>
           {active ? (
             <div className="card">
-              <h3>{bonoName(active.bonoId)}{active.trimestre && ' · Trimestre'}</h3>
+              <h3>{bonoName(bonos, active.bonoId)}{active.trimestre && ' · Trimestre'}</h3>
               <p className="muted">Clases disponibles: <b>{active.classesTotal === null ? 'Ilimitadas' : `${active.classesTotal - active.classesUsed} de ${active.classesTotal}`}</b></p>
               <p className="muted">Válido hasta {fmtDate(new Date(active.expiryDate))}</p>
             </div>
           ) : pendiente ? (
-            <div className="card"><h3>{bonoName(pendiente.bonoId)}{pendiente.trimestre && ' · Trimestre'}</h3><p className="muted">Solicitado, pendiente de confirmar el pago con Beatriz.</p></div>
+            <div className="card"><h3>{bonoName(bonos, pendiente.bonoId)}{pendiente.trimestre && ' · Trimestre'}</h3><p className="muted">Solicitado, pendiente de confirmar el pago con Beatriz.</p></div>
           ) : (
             <div className="empty">No tienes ningún bono activo ahora mismo.</div>
           )}
         </>
       )}
       <div className="sectionlabel">Elige un bono</div>
-      {BONOS.map(b => {
+      {bonos.map(b => {
         const tri = BONO_TRIMESTRE[b.id];
         return (
           <div className="card" key={b.id}>
@@ -524,7 +532,7 @@ function NotificationsCard({ studentId, toast }) {
   );
 }
 
-function MyBonoCard({ me, purchases, activePurchaseFor }) {
+function MyBonoCard({ me, purchases, activePurchaseFor, bonos }) {
   const active = activePurchaseFor(me.id);
   const pendiente = purchases.filter(p => p.studentId === me.id && p.status === 'pendiente')
     .sort((a, b) => new Date(b.purchaseDate) - new Date(a.purchaseDate))[0];
@@ -543,12 +551,12 @@ function MyBonoCard({ me, purchases, activePurchaseFor }) {
       <h3>Mi bono</h3>
       {active ? (
         <>
-          <p className="muted">{bonoName(active.bonoId)}{active.trimestre && ' · Trimestre'}</p>
+          <p className="muted">{bonoName(bonos, active.bonoId)}{active.trimestre && ' · Trimestre'}</p>
           <p className="muted">Clases disponibles: <b>{active.classesTotal === null ? 'Ilimitadas' : `${active.classesTotal - active.classesUsed} de ${active.classesTotal}`}</b></p>
           <p className="muted">Válido hasta {fmtDate(new Date(active.expiryDate))}</p>
         </>
       ) : (
-        <p className="muted">{bonoName(pendiente.bonoId)}{pendiente.trimestre && ' · Trimestre'} · solicitado, pendiente de confirmar el pago.</p>
+        <p className="muted">{bonoName(bonos, pendiente.bonoId)}{pendiente.trimestre && ' · Trimestre'} · solicitado, pendiente de confirmar el pago.</p>
       )}
     </div>
   );
@@ -579,7 +587,7 @@ function MyUpcomingBookings({ me, bookings }) {
   );
 }
 
-function PerfilTab({ me, pickProfile, clearProfile, purchases, bookings, activePurchaseFor, isAdmin, onAdminLogin, onAdminLogout, setTab, toast }) {
+function PerfilTab({ me, pickProfile, clearProfile, purchases, bookings, activePurchaseFor, bonos, isAdmin, onAdminLogin, onAdminLogout, setTab, toast }) {
   const [searchPhone, setSearchPhone] = useState('');
   const [searching, setSearching] = useState(false);
 
@@ -611,7 +619,7 @@ function PerfilTab({ me, pickProfile, clearProfile, purchases, bookings, activeP
             <p className="muted">Cumpleaños: {me.birthday || '—'}</p>
             <p className="muted">Cómo nos conoció: {me.howFound || '—'}</p>
           </div>
-          <MyBonoCard me={me} purchases={purchases} activePurchaseFor={activePurchaseFor} />
+          <MyBonoCard me={me} purchases={purchases} activePurchaseFor={activePurchaseFor} bonos={bonos} />
           <MyUpcomingBookings me={me} bookings={bookings} />
           <div className="sectionlabel">Editar datos</div>
           <ProfileForm existing={me} onSave={handleSave} />
@@ -647,8 +655,11 @@ function PerfilTab({ me, pickProfile, clearProfile, purchases, bookings, activeP
 }
 
 /* ---------------- ADMIN ---------------- */
-function AdminAlumnaCard({ s, students, saveStudents, active, total, toast }) {
+function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purchases, savePurchases, toast }) {
   const [editing, setEditing] = useState(false);
+  const [assigningBono, setAssigningBono] = useState(false);
+  const [bonoId, setBonoId] = useState('');
+  const [trimestre, setTrimestre] = useState(false);
 
   function handleSave(data, error) {
     if (error) { toast(error); return; }
@@ -661,6 +672,24 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, toast }) {
     if (!confirm(`¿Seguro que quieres eliminar a ${s.name}? Sus reservas y bonos no se borrarán, pero dejarán de mostrar su nombre.`)) return;
     saveStudents(students.filter(x => x.id !== s.id));
     toast('Alumna eliminada');
+  }
+
+  function handleAssignBono() {
+    const b = bonos.find(x => x.id === bonoId);
+    if (!b) { toast('Elige un bono'); return; }
+    const tri = trimestre ? BONO_TRIMESTRE[b.id] : null;
+    const purchase = {
+      id: uid(), studentId: s.id, bonoId: b.id, trimestre: !!tri,
+      price: tri ? tri.price : b.price,
+      classesTotal: b.classes === null ? null : (tri ? b.classes * 3 : b.classes),
+      classesUsed: 0, status: 'confirmado', paymentMethod: 'efectivo',
+      purchaseDate: new Date().toISOString(), expiryDate: addDays(new Date(), tri ? 90 : 30).toISOString()
+    };
+    savePurchases([...purchases, purchase]);
+    setAssigningBono(false);
+    setBonoId('');
+    setTrimestre(false);
+    toast(`${b.name} dado de alta en efectivo para ${s.name}`);
   }
 
   if (editing) {
@@ -678,25 +707,44 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, toast }) {
       <p className="muted">{s.phone} · {s.email}</p>
       <p className="muted">Cumpleaños: {s.birthday || '—'} · Conoció por: {s.howFound || '—'}</p>
       <div className="row" style={{ marginTop: 8 }}>
-        <span className={`pill ${active ? 'pill-sage' : 'pill-gray'}`}>{active ? `${bonoName(active.bonoId)} activo` : 'Sin bono activo'}</span>
+        <span className={`pill ${active ? 'pill-sage' : 'pill-gray'}`}>{active ? `${bonoName(bonos, active.bonoId)} activo` : 'Sin bono activo'}</span>
         <span className="pill pill-lav">{total} reservas totales</span>
         {typeof s.legacyReservas === 'number' && <span className="pill pill-gray">{s.legacyReservas} históricas (app anterior)</span>}
       </div>
       <div className="row" style={{ marginTop: 10 }}>
         <button className="linklike" onClick={() => setEditing(true)}>Editar</button>
+        <button className="linklike" onClick={() => setAssigningBono(!assigningBono)}>{assigningBono ? 'Cancelar' : '+ Bono en efectivo'}</button>
         <button className="linklike" style={{ color: 'var(--danger)' }} onClick={handleDelete}>Eliminar</button>
       </div>
+      {assigningBono && (
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
+          <label>Bono pagado en efectivo</label>
+          <select value={bonoId} onChange={e => setBonoId(e.target.value)}>
+            <option value="">Selecciona un bono</option>
+            {bonos.map(b => <option key={b.id} value={b.id}>{b.name} · {b.price}€</option>)}
+          </select>
+          {bonoId && BONO_TRIMESTRE[bonoId] && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
+              <input type="checkbox" style={{ width: 'auto' }} checked={trimestre} onChange={e => setTrimestre(e.target.checked)} />
+              Trimestre ({BONO_TRIMESTRE[bonoId].price}€, 3 meses)
+            </label>
+          )}
+          <button className="btn btn-sage btn-sm" style={{ marginTop: 10 }} onClick={handleAssignBono}>Confirmar alta</button>
+        </div>
+      )}
     </div>
   );
 }
 
-function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, activePurchaseFor, adminToken, savePurchases, saveBookings, saveWallPosts, toast }) {
+function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, activePurchaseFor, adminToken, schedule, saveSchedule, bonos, saveBonos, savePurchases, saveBookings, saveWallPosts, toast }) {
   const [alumnaSearch, setAlumnaSearch] = useState('');
   const tabs = [
     { id: 'resumen', label: 'Resumen del día' },
     { id: 'alumnas', label: 'Alumnas' },
     { id: 'bonospend', label: 'Bonos pendientes' },
     { id: 'bonosactivos', label: 'Bonos confirmados' },
+    { id: 'horarios', label: 'Horarios' },
+    { id: 'gestionbonos', label: 'Gestionar bonos' },
     { id: 'muro', label: 'Publicar en el muro' },
     { id: 'importar', label: 'Importar alumnas' }
   ];
@@ -708,7 +756,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
         ))}
       </div>
       {adminTab === 'resumen' && (
-        <AdminResumen students={students} bookings={bookings} saveBookings={saveBookings} toast={toast} />
+        <AdminResumen students={students} bookings={bookings} saveBookings={saveBookings} schedule={schedule} toast={toast} />
       )}
       {adminTab === 'alumnas' && (
         <>
@@ -726,7 +774,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
             return [...filtered].sort((a, b) => a.name.localeCompare(b.name)).map(s => (
               <AdminAlumnaCard key={s.id} s={s} students={students} saveStudents={saveStudents}
                 active={activePurchaseFor(s.id)} total={bookings.filter(b => b.studentId === s.id).length}
-                toast={toast} />
+                bonos={bonos} purchases={purchases} savePurchases={savePurchases} toast={toast} />
             ));
           })()}
         </>
@@ -739,7 +787,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
               const s = students.find(x => x.id === p.studentId);
               return (
                 <div className="card" key={p.id}>
-                  <h3>{bonoName(p.bonoId)}{p.trimestre && ' · Trimestre'} <span className="pill pill-lav">{p.paymentMethod === 'redsys' ? 'Tarjeta' : 'Bizum'}</span></h3>
+                  <h3>{bonoName(bonos, p.bonoId)}{p.trimestre && ' · Trimestre'} <span className="pill pill-lav">{p.paymentMethod === 'redsys' ? 'Tarjeta' : 'Bizum'}</span></h3>
                   <p className="muted">{s ? s.name : 'Alumna eliminada'} · {s ? s.phone : ''}</p>
                   <p className="muted">Solicitado el {fmtDate(new Date(p.purchaseDate))}</p>
                   <div className="row" style={{ marginTop: 8 }}>
@@ -749,7 +797,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
                       toast('Bono confirmado');
                     }}>Marcar como pagado</button>
                     <button className="btn btn-outline btn-sm" onClick={() => {
-                      if (!confirm(`¿Cancelar la solicitud de ${bonoName(p.bonoId)} de ${s ? s.name : 'esta alumna'}?`)) return;
+                      if (!confirm(`¿Cancelar la solicitud de ${bonoName(bonos, p.bonoId)} de ${s ? s.name : 'esta alumna'}?`)) return;
                       savePurchases(purchases.map(x => x.id === p.id ? { ...x, status: 'cancelado' } : x));
                       toast('Solicitud cancelada');
                     }}>Cancelar</button>
@@ -793,13 +841,13 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
                 const vencido = new Date(p.expiryDate) < new Date();
                 return (
                   <div className="card" key={p.id}>
-                    <h3>{bonoName(p.bonoId)}{p.trimestre && ' · Trimestre'} <span className="pill pill-lav">{p.paymentMethod === 'redsys' ? 'Tarjeta' : 'Bizum'}</span></h3>
+                    <h3>{bonoName(bonos, p.bonoId)}{p.trimestre && ' · Trimestre'} <span className="pill pill-lav">{p.paymentMethod === 'redsys' ? 'Tarjeta' : 'Bizum'}</span></h3>
                     <p className="muted">{s ? s.name : 'Alumna eliminada'} · {s ? s.phone : ''}</p>
                     <p className="muted">Clases: <b>{p.classesTotal === null ? 'Ilimitadas' : `${p.classesUsed || 0} de ${p.classesTotal} usadas`}</b></p>
                     <div className="row" style={{ marginTop: 8, alignItems: 'center' }}>
                       <span className={`pill ${vencido ? 'pill-gray' : 'pill-sage'}`}>{vencido ? 'Caducado' : `Válido hasta ${fmtDate(new Date(p.expiryDate))}`}</span>
                       <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => {
-                        if (!confirm(`¿Cancelar el bono ${bonoName(p.bonoId)} de ${s ? s.name : 'esta alumna'}? Dejará de estar activo.`)) return;
+                        if (!confirm(`¿Cancelar el bono ${bonoName(bonos, p.bonoId)} de ${s ? s.name : 'esta alumna'}? Dejará de estar activo.`)) return;
                         savePurchases(purchases.map(x => x.id === p.id ? { ...x, status: 'cancelado' } : x));
                         toast('Bono cancelado');
                       }}>Cancelar bono</button>
@@ -827,18 +875,167 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
               })}
         </>
       )}
+      {adminTab === 'horarios' && <AdminHorarios schedule={schedule} saveSchedule={saveSchedule} toast={toast} />}
+      {adminTab === 'gestionbonos' && <AdminBonos bonos={bonos} saveBonos={saveBonos} toast={toast} />}
       {adminTab === 'muro' && <AdminMuro wallPosts={wallPosts} saveWallPosts={saveWallPosts} adminToken={adminToken} toast={toast} />}
       {adminTab === 'importar' && <AdminImport students={students} saveStudents={saveStudents} toast={toast} />}
     </>
   );
 }
 
-function AdminResumen({ students, bookings, saveBookings, toast }) {
+function AdminHorarios({ schedule, saveSchedule, toast }) {
+  const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+  function updateDay(day, classes) {
+    saveSchedule({ ...schedule, [day]: classes });
+  }
+  return (
+    <>
+      {days.map(day => (
+        <AdminHorarioDay key={day} day={day} classes={schedule[day] || []} onChange={(next) => updateDay(day, next)} />
+      ))}
+    </>
+  );
+}
+
+function AdminHorarioDay({ day, classes, onChange }) {
+  const [editing, setEditing] = useState(null); // índice en edición, o 'new'
+  const [time, setTime] = useState('');
+  const [name, setName] = useState('');
+
+  function startAdd() { setEditing('new'); setTime(''); setName(''); }
+  function startEdit(i) { setEditing(i); setTime(classes[i].time); setName(classes[i].name); }
+  function cancel() { setEditing(null); }
+  function save() {
+    if (!time.trim() || !name.trim()) return;
+    let next;
+    if (editing === 'new') next = [...classes, { time: time.trim(), name: name.trim() }];
+    else next = classes.map((c, i) => i === editing ? { time: time.trim(), name: name.trim() } : c);
+    next = [...next].sort((a, b) => a.time.localeCompare(b.time));
+    onChange(next);
+    setEditing(null);
+  }
+  function remove(i) {
+    if (!confirm(`¿Eliminar ${classes[i].name} (${classes[i].time}) de ${day}?`)) return;
+    onChange(classes.filter((_, x) => x !== i));
+  }
+
+  return (
+    <div className="card">
+      <h3>{day}</h3>
+      {classes.length === 0 && editing === null && <p className="muted">Sin clases este día.</p>}
+      {classes.map((c, i) => editing === i ? (
+        <div key={i} className="row" style={{ marginTop: 8, alignItems: 'center' }}>
+          <input type="time" value={time} onChange={e => setTime(e.target.value)} style={{ width: 110, flex: 'none' }} />
+          <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Nombre de la clase" style={{ width: 'auto', flex: 1 }} />
+          <button className="btn btn-sage btn-sm" onClick={save}>Guardar</button>
+          <button className="linklike" onClick={cancel}>Cancelar</button>
+        </div>
+      ) : (
+        <div key={i} className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+          <span>{c.time} · {c.name}</span>
+          <div className="row">
+            <button className="linklike" onClick={() => startEdit(i)}>Editar</button>
+            <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => remove(i)}>Eliminar</button>
+          </div>
+        </div>
+      ))}
+      {editing === 'new' ? (
+        <div className="row" style={{ marginTop: 10, alignItems: 'center' }}>
+          <input type="time" value={time} onChange={e => setTime(e.target.value)} style={{ width: 110, flex: 'none' }} />
+          <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Nombre de la clase" style={{ width: 'auto', flex: 1 }} />
+          <button className="btn btn-sage btn-sm" onClick={save}>Añadir</button>
+          <button className="linklike" onClick={cancel}>Cancelar</button>
+        </div>
+      ) : (
+        <button className="linklike" style={{ marginTop: 10 }} onClick={startAdd}>+ Añadir clase</button>
+      )}
+    </div>
+  );
+}
+
+function BonoForm({ form, setForm, onSave, onCancel }) {
+  return (
+    <>
+      <label>Nombre</label>
+      <input type="text" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Ej. Bono 15" />
+      <label>Descripción</label>
+      <input type="text" value={form.desc} onChange={e => setForm({ ...form, desc: e.target.value })} placeholder="Ej. 15 clases al mes" />
+      <label>Precio (€)</label>
+      <input type="number" value={form.price} onChange={e => setForm({ ...form, price: e.target.value })} placeholder="130" />
+      <label>Nº de clases al mes (vacío = ilimitadas)</label>
+      <input type="number" value={form.classes} onChange={e => setForm({ ...form, classes: e.target.value })} placeholder="15" />
+      <div className="row" style={{ marginTop: 12 }}>
+        <button className="btn btn-sage btn-sm" onClick={onSave}>Guardar</button>
+        <button className="linklike" onClick={onCancel}>Cancelar</button>
+      </div>
+    </>
+  );
+}
+
+function AdminBonos({ bonos, saveBonos, toast }) {
+  const [editing, setEditing] = useState(null); // id en edición, o 'new'
+  const [form, setForm] = useState({ name: '', desc: '', price: '', classes: '' });
+
+  function startAdd() { setEditing('new'); setForm({ name: '', desc: '', price: '', classes: '' }); }
+  function startEdit(b) { setEditing(b.id); setForm({ name: b.name, desc: b.desc, price: String(b.price), classes: b.classes === null ? '' : String(b.classes) }); }
+  function cancel() { setEditing(null); }
+  function save() {
+    if (!form.name.trim() || !form.price) { toast('Nombre y precio son obligatorios'); return; }
+    const classesVal = form.classes.trim() === '' ? null : Number(form.classes);
+    const bonoData = { name: form.name.trim(), desc: form.desc.trim(), price: Number(form.price), classes: classesVal };
+    let next;
+    if (editing === 'new') next = [...bonos, { id: uid(), ...bonoData }];
+    else next = bonos.map(b => b.id === editing ? { ...b, ...bonoData } : b);
+    saveBonos(next);
+    setEditing(null);
+    toast(editing === 'new' ? 'Bono añadido' : 'Bono actualizado');
+  }
+  function remove(b) {
+    if (!confirm(`¿Eliminar ${b.name}? Las alumnas que ya lo tengan contratado no se ven afectadas.`)) return;
+    saveBonos(bonos.filter(x => x.id !== b.id));
+    toast('Bono eliminado');
+  }
+
+  return (
+    <>
+      {bonos.map(b => (
+        <div className="card" key={b.id}>
+          {editing === b.id ? (
+            <BonoForm form={form} setForm={setForm} onSave={save} onCancel={cancel} />
+          ) : (
+            <>
+              <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <h3>{b.name}</h3>
+                  <p className="muted">{b.desc}</p>
+                </div>
+                <div className="serif" style={{ fontSize: 17, fontWeight: 600, color: 'var(--plum)' }}>{b.price}€</div>
+              </div>
+              <div className="row" style={{ marginTop: 10 }}>
+                <button className="linklike" onClick={() => startEdit(b)}>Editar</button>
+                <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => remove(b)}>Eliminar</button>
+              </div>
+            </>
+          )}
+        </div>
+      ))}
+      <div className="card">
+        {editing === 'new' ? (
+          <BonoForm form={form} setForm={setForm} onSave={save} onCancel={cancel} />
+        ) : (
+          <button className="btn btn-primary" onClick={startAdd}>+ Añadir bono nuevo</button>
+        )}
+      </div>
+    </>
+  );
+}
+
+function AdminResumen({ students, bookings, saveBookings, schedule, toast }) {
   const [offset, setOffset] = useState(0);
   const date = addDays(new Date(), offset);
   const dateIso = isoDate(date);
   const dayName = Object.keys(DAY_INDEX).find(k => DAY_INDEX[k] === date.getDay());
-  const classes = SCHEDULE[dayName] || [];
+  const classes = schedule[dayName] || [];
 
   return (
     <>
@@ -852,38 +1049,82 @@ function AdminResumen({ students, bookings, saveBookings, toast }) {
       </div>
       {classes.length === 0 ? (
         <div className="empty">No hay clases programadas este día.</div>
-      ) : classes.map((c, idx) => {
-        const attendees = bookings.filter(b => b.date === dateIso && b.time === c.time && b.className === c.name && b.status !== 'cancelada');
-        return (
-          <div className="card" key={idx}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 13, justifyContent: 'space-between' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
-                <div className="time">{c.time}</div>
-                <div className="name">{c.name}</div>
-              </div>
-              <span className="pill pill-lav">{attendees.length} apuntada{attendees.length === 1 ? '' : 's'}</span>
-            </div>
-            {attendees.length > 0 && (
-              <ul style={{ margin: '10px 0 0', paddingLeft: 18 }}>
-                {attendees.map(b => {
-                  const s = students.find(x => x.id === b.studentId);
-                  return (
-                    <li key={b.id} className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, listStyle: 'none', marginLeft: -18, marginBottom: 4 }}>
-                      <span>{s ? s.name : 'Alumna eliminada'}</span>
-                      {b.status === 'pendiente_pago' && <span className="pill pill-gray">Pago pendiente</span>}
-                      <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => {
-                        saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'cancelada' } : x));
-                        toast('Reserva cancelada');
-                      }}>Cancelar</button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-        );
-      })}
+      ) : classes.map((c, idx) => (
+        <AdminResumenClass key={idx} cls={c} dateIso={dateIso} students={students} bookings={bookings}
+          saveBookings={saveBookings} toast={toast} />
+      ))}
     </>
+  );
+}
+
+function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, toast }) {
+  const [adding, setAdding] = useState(false);
+  const [search, setSearch] = useState('');
+  const attendees = bookings.filter(b => b.date === dateIso && b.time === c.time && b.className === c.name && b.status !== 'cancelada');
+  const full = attendees.length >= CLASS_CAPACITY;
+
+  const q = search.trim().toLowerCase();
+  const matches = q.length < 2 ? [] : students.filter(s =>
+    (s.name || '').toLowerCase().includes(q) || (s.phone || '').toLowerCase().includes(q)
+  ).filter(s => !attendees.some(b => b.studentId === s.id)).slice(0, 6);
+
+  function addStudent(s) {
+    const booking = {
+      id: uid(), studentId: s.id, day: dayNameForDate(new Date(dateIso)), time: c.time, className: c.name,
+      date: dateIso, status: 'confirmada', paymentMethod: 'efectivo', price: CLASE_SUELTA_PRECIO,
+      createdAt: new Date().toISOString()
+    };
+    saveBookings([...bookings, booking]);
+    setAdding(false);
+    setSearch('');
+    toast(`${s.name} añadida a ${c.name} (efectivo)`);
+  }
+
+  return (
+    <div className="card">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 13, justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
+          <div className="time">{c.time}</div>
+          <div className="name">{c.name}</div>
+        </div>
+        <span className="pill pill-lav">{attendees.length} apuntada{attendees.length === 1 ? '' : 's'}</span>
+      </div>
+      {attendees.length > 0 && (
+        <ul style={{ margin: '10px 0 0', paddingLeft: 18 }}>
+          {attendees.map(b => {
+            const s = students.find(x => x.id === b.studentId);
+            return (
+              <li key={b.id} className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, listStyle: 'none', marginLeft: -18, marginBottom: 4 }}>
+                <span>{s ? s.name : 'Alumna eliminada'}</span>
+                {b.status === 'pendiente_pago' && <span className="pill pill-gray">Pago pendiente</span>}
+                {b.paymentMethod === 'efectivo' && <span className="pill pill-sage">Efectivo</span>}
+                <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => {
+                  saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'cancelada' } : x));
+                  toast('Reserva cancelada');
+                }}>Cancelar</button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {full ? (
+        <p className="muted" style={{ marginTop: 10 }}>Clase completa, no se puede añadir a nadie más.</p>
+      ) : adding ? (
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
+          <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar alumna por nombre o teléfono…" autoFocus />
+          {q.length >= 2 && matches.length === 0 && <p className="muted" style={{ marginTop: 6 }}>Sin resultados.</p>}
+          {matches.map(s => (
+            <div key={s.id} className="optionbox" style={{ marginTop: 8 }} onClick={() => addStudent(s)}>
+              <div className="t">{s.name}</div>
+              <div className="s">{s.phone}</div>
+            </div>
+          ))}
+          <button className="linklike" style={{ marginTop: 8 }} onClick={() => { setAdding(false); setSearch(''); }}>Cancelar</button>
+        </div>
+      ) : (
+        <button className="linklike" style={{ marginTop: 10 }} onClick={() => setAdding(true)}>+ Añadir alumna (efectivo)</button>
+      )}
+    </div>
   );
 }
 
@@ -964,7 +1205,7 @@ function AdminMuro({ wallPosts, saveWallPosts, adminToken, toast }) {
 }
 
 /* ---------------- MODALES ---------------- */
-function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases, me, pickProfile, activePurchaseFor, toast, onClose }) {
+function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases, bonos, me, pickProfile, activePurchaseFor, toast, onClose }) {
   const { day, cls, dateIso } = modal;
 
   function confirmBookingWithBono(purchaseId) {
@@ -1008,7 +1249,7 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
             <hr className="sep" />
             {active ? (
               <div className="optionbox" onClick={() => confirmBookingWithBono(active.id)}>
-                <div className="t">Usar mi {bonoName(active.bonoId)}</div>
+                <div className="t">Usar mi {bonoName(bonos, active.bonoId)}</div>
                 <div className="s">Clases {active.classesTotal === null ? 'ilimitadas' : `${active.classesTotal - active.classesUsed} restantes`}</div>
               </div>
             ) : <p className="muted">No tienes un bono activo para esta fecha.</p>}

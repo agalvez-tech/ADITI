@@ -5,15 +5,16 @@ const redis = Redis.fromEnv();
 
 // Solo se permite leer/escribir estas claves compartidas.
 // Evita que alguien use el endpoint para escribir cualquier cosa en tu Redis.
-const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts'];
+const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts', 'schedule', 'bonos'];
 
 // 'students' contiene datos personales de todas las alumnas: ni lectura ni
 // escritura completas sin ser admin (las alumnas usan api/student-profile.js
 // para su propia ficha, así nunca reciben el listado completo).
 const ADMIN_ONLY_READ_KEYS = ['students'];
 
-// 'wallPosts' (el Muro) lo lee cualquier alumna, pero solo Beatriz publica o borra.
-const ADMIN_ONLY_WRITE_KEYS = ['students', 'wallPosts'];
+// 'wallPosts' (el Muro), 'schedule' (horarios) y 'bonos' los lee cualquier
+// alumna, pero solo Beatriz los edita.
+const ADMIN_ONLY_WRITE_KEYS = ['students', 'wallPosts', 'schedule', 'bonos'];
 
 // Para 'bookings' y 'purchases', las alumnas sí necesitan poder crear su propia
 // reserva/compra sin ser admin. Sin token, solo se permite un cambio mínimo y
@@ -112,6 +113,13 @@ async function runBrevoSideEffects(key, value, diff) {
     await notifyBonoConfirmado(student, diff.after);
     return;
   }
+  if (key === 'purchases' && diff?.type === 'append' && diff.item.status === 'confirmado') {
+    // Alta manual de un bono ya pagado (ej. en efectivo) hecha por Beatriz.
+    const students = (await redis.get('students')) || [];
+    const student = students.find(s => s.id === diff.item.studentId);
+    await notifyBonoConfirmado(student, diff.item);
+    return;
+  }
   if (key === 'purchases' && diff?.type === 'modify' && diff.before.status !== diff.after.status) {
     // Cualquier otro cambio de estado (ej. cancelar un bono confirmado) resincroniza
     // la lista de Brevo de la alumna, sin mandar el email de "bono confirmado".
@@ -124,6 +132,13 @@ async function runBrevoSideEffects(key, value, diff) {
     const students = (await redis.get('students')) || [];
     const student = students.find(s => s.id === diff.after.studentId);
     await notifySueltaConfirmada(student, diff.after);
+    return;
+  }
+  if (key === 'bookings' && diff?.type === 'append' && diff.item.status === 'confirmada' && diff.item.paymentMethod === 'efectivo') {
+    // Alta manual de una clase ya pagada en efectivo, hecha por Beatriz.
+    const students = (await redis.get('students')) || [];
+    const student = students.find(s => s.id === diff.item.studentId);
+    await notifySueltaConfirmada(student, diff.item);
     return;
   }
   if (key === 'wallPosts' && diff?.type === 'append') {
