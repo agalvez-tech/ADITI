@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useContext } from 'react';
 import * as XLSX from 'xlsx';
-import { getData, setData, adminLogin, findStudent, upsertStudent } from './api.js';
+import { getData, setData, adminLogin, findStudent, upsertStudent, changeAdminPin } from './api.js';
 import { payWithRedsys } from './redsys.js';
 import { registerServiceWorker, subscribeToPush, unsubscribeFromPush, getCurrentSubscription, pushSupported } from './push.js';
 import { uploadWallImage, deleteWallImage } from './upload.js';
@@ -56,28 +56,22 @@ const CLASS_STYLE = {
   'Fuerza y Core': 'pill-gray'
 };
 
+// trimestrePrice: precio de pago único por 3 meses (opcional). Si no se pone,
+// ese bono simplemente no ofrece opción de trimestre.
 const DEFAULT_BONOS = [
-  { id: 'bono4', name: 'Bono 4', desc: '4 clases al mes · 1 día a la semana', price: 60, classes: 4 },
-  { id: 'bono6', name: 'Bono 6', desc: '6 clases al mes · ≥2 días a la semana', price: 80, classes: 6 },
-  { id: 'bono8', name: 'Bono 8', desc: '8 clases al mes · 2 días a la semana', price: 95, classes: 8 },
-  { id: 'bono10', name: 'Bono 10', desc: '10 clases al mes', price: 105, classes: 10 },
-  { id: 'bono12', name: 'Bono 12', desc: '12 clases al mes · 3 días a la semana', price: 120, classes: 12 },
-  { id: 'ilimitado', name: 'Bono ilimitado', desc: 'Clases ilimitadas', price: 150, classes: null }
+  { id: 'bono4', name: 'Bono 4', desc: '4 clases al mes · 1 día a la semana', price: 60, classes: 4, trimestrePrice: 165 },
+  { id: 'bono6', name: 'Bono 6', desc: '6 clases al mes · ≥2 días a la semana', price: 80, classes: 6, trimestrePrice: 220 },
+  { id: 'bono8', name: 'Bono 8', desc: '8 clases al mes · 2 días a la semana', price: 95, classes: 8, trimestrePrice: 260 },
+  { id: 'bono10', name: 'Bono 10', desc: '10 clases al mes', price: 105, classes: 10, trimestrePrice: 285 },
+  { id: 'bono12', name: 'Bono 12', desc: '12 clases al mes · 3 días a la semana', price: 120, classes: 12, trimestrePrice: 325 },
+  { id: 'ilimitado', name: 'Bono ilimitado', desc: 'Clases ilimitadas', price: 150, classes: null, trimestrePrice: 405 }
 ];
-// Pago único de 3 meses para cada bono (precio total e importe que se ahorra
-// frente a pagar 3 meses sueltos). El de bono12 es una estimación a falta de
-// confirmar el precio oficial (no salía en el folleto de trimestres).
-const BONO_TRIMESTRE = {
-  bono4: { price: 165, ahorro: 15 },
-  bono6: { price: 220, ahorro: 20 },
-  bono8: { price: 260, ahorro: 25 },
-  bono10: { price: 285, ahorro: 30 },
-  bono12: { price: 325, ahorro: 35 },
-  ilimitado: { price: 405, ahorro: 45 }
-};
-const CLASE_SUELTA_PRECIO = 20;
-const CLASS_CAPACITY = 8;
-const BIZUM_PHONE = '691750534';
+const DEFAULT_SETTINGS = { claseSueltaPrice: 20, bizumPhone: '691750534', whatsappPhone: '34652689928', defaultCapacity: 8 };
+const SettingsContext = React.createContext(DEFAULT_SETTINGS);
+function bonoTrimestre(b) {
+  if (!b || !b.trimestrePrice) return null;
+  return { price: b.trimestrePrice, ahorro: b.price * 3 - b.trimestrePrice };
+}
 const HOW_FOUND = ['Instagram', 'Facebook', 'Google', 'Recomendación de una amiga', 'Al pasar por el centro', 'Cartel o flyer', 'Web aditifunctionalyoga.es', 'Otro'];
 
 function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
@@ -105,6 +99,7 @@ export default function App() {
   const [wallPosts, setWallPosts] = useState([]);
   const [schedule, setSchedule] = useState(DEFAULT_SCHEDULE);
   const [bonos, setBonos] = useState(DEFAULT_BONOS);
+  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [myId, setMyId] = useState(() => localStorage.getItem('aditi_myId') || null);
   const [me, setMe] = useState(null);
   const [adminToken, setAdminToken] = useState(() => localStorage.getItem('aditi_admin_token') || null);
@@ -124,8 +119,8 @@ export default function App() {
       return Promise.all([
         isAdmin ? getData('students', adminToken) : Promise.resolve(null),
         getData('bookings'), getData('purchases'), getData('wallPosts'),
-        getData('schedule'), getData('bonos')
-      ]).then(([s, b, p, w, sch, bo]) => {
+        getData('schedule'), getData('bonos'), getData('settings')
+      ]).then(([s, b, p, w, sch, bo, cfg]) => {
         if (cancelled) return;
         if (isAdmin) setStudents(s || []);
         setBookings(b || []);
@@ -133,6 +128,7 @@ export default function App() {
         setWallPosts(w || []);
         if (sch) setSchedule(sch);
         if (bo) setBonos(bo);
+        if (cfg) setSettings({ ...DEFAULT_SETTINGS, ...cfg });
         setLoading(false);
       }).catch(() => { if (!cancelled) setLoading(false); });
     }
@@ -164,6 +160,7 @@ export default function App() {
   function saveWallPosts(next) { setWallPosts(next); setData('wallPosts', next, adminToken); }
   function saveSchedule(next) { setSchedule(next); setData('schedule', next, adminToken); }
   function saveBonos(next) { setBonos(next); setData('bonos', next, adminToken); }
+  function saveSettings(next) { setSettings(next); setData('settings', next, adminToken); }
   function pickProfile(id) { setMyId(id); localStorage.setItem('aditi_myId', id); }
   function clearProfile() { setMyId(null); localStorage.removeItem('aditi_myId'); }
 
@@ -190,6 +187,7 @@ export default function App() {
   }
 
   return (
+    <SettingsContext.Provider value={settings}>
     <div className="app-wrap">
       <Header tab={tab} />
       <div className="content">
@@ -217,12 +215,13 @@ export default function App() {
             students={students} saveStudents={saveStudents} bookings={bookings} purchases={purchases} wallPosts={wallPosts}
             activePurchaseFor={activePurchaseFor} adminToken={adminToken}
             schedule={schedule} saveSchedule={saveSchedule} bonos={bonos} saveBonos={saveBonos}
+            settings={settings} saveSettings={saveSettings} onAdminLogout={logoutAdmin}
             savePurchases={savePurchases} saveBookings={saveBookings} saveWallPosts={saveWallPosts}
             toast={toast} />
         ) : null}
       </div>
       <BottomNav tab={tab} setTab={setTab} isAdmin={isAdmin} />
-      <a className="wa-float" href="https://wa.me/34652689928?text=Hola%20Beatriz%2C%20te%20escribo%20desde%20la%20app%20de%20Aditi%20Functional%20Yoga" target="_blank" rel="noopener" aria-label="Escribir por WhatsApp a Beatriz">
+      <a className="wa-float" href={`https://wa.me/${settings.whatsappPhone}?text=Hola%20Beatriz%2C%20te%20escribo%20desde%20la%20app%20de%20Aditi%20Functional%20Yoga`} target="_blank" rel="noopener" aria-label="Escribir por WhatsApp a Beatriz">
         <WaIcon />
       </a>
       {toastMsg && <div className="toast">{toastMsg}</div>}
@@ -239,6 +238,7 @@ export default function App() {
           toast={toast} onClose={() => setModal(null)} />
       )}
     </div>
+    </SettingsContext.Provider>
   );
 }
 
@@ -308,6 +308,7 @@ function MuroTab({ wallPosts }) {
 
 /* ---------------- HORARIO ---------------- */
 function HorarioTab({ bookings, schedule, onPickClass }) {
+  const settings = useContext(SettingsContext);
   const [weekStart, setWeekStart] = useState(() => startOfWeekMonday(new Date()));
   const [monthCursor, setMonthCursor] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
 
@@ -339,7 +340,7 @@ function HorarioTab({ bookings, schedule, onPickClass }) {
               <div className="muted" style={{ padding: '4px 0 8px' }}>Sin clases este día.</div>
             ) : classes.map((c, idx) => {
               const attendees = bookings.filter(b => b.date === dateIso && b.time === c.time && b.className === c.name && b.status !== 'cancelada').length;
-              const full = attendees >= CLASS_CAPACITY;
+              const full = attendees >= (c.capacity || settings.defaultCapacity);
               return (
                 <div className="classcard" key={idx} onClick={() => onPickClass(c, dateIso, dayName)}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
@@ -397,6 +398,7 @@ function MiniMonthCalendar({ monthCursor, setMonthCursor, weekStart, onPickDate 
 
 /* ---------------- BONOS ---------------- */
 function BonosTab({ me, activePurchaseFor, purchases, bonos, onRequestBono }) {
+  const settings = useContext(SettingsContext);
   const active = me ? activePurchaseFor(me.id) : null;
   const pendiente = me ? purchases.filter(p => p.studentId === me.id && p.status === 'pendiente').sort((a, b) => new Date(b.purchaseDate) - new Date(a.purchaseDate))[0] : null;
   return (
@@ -424,7 +426,7 @@ function BonosTab({ me, activePurchaseFor, purchases, bonos, onRequestBono }) {
       )}
       <div className="sectionlabel">Elige un bono</div>
       {bonos.map(b => {
-        const tri = BONO_TRIMESTRE[b.id];
+        const tri = bonoTrimestre(b);
         return (
           <div className="card" key={b.id}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -451,9 +453,9 @@ function BonosTab({ me, activePurchaseFor, purchases, bonos, onRequestBono }) {
       })}
       <div className="card" style={{ background: 'var(--peach-pale)', borderColor: 'var(--peach)' }}>
         <h3 style={{ color: '#8A4128' }}>Clase suelta</h3>
-        <p className="muted">Si no tienes bono, puedes reservar una clase individual por {CLASE_SUELTA_PRECIO}€ desde la pestaña Reservar.</p>
+        <p className="muted">Si no tienes bono, puedes reservar una clase individual por {settings.claseSueltaPrice}€ desde la pestaña Reservar.</p>
       </div>
-      <p className="muted" style={{ textAlign: 'center', marginTop: 6 }}>Puedes pagar con tarjeta al momento o por Bizum al {BIZUM_PHONE}. La app registra tu solicitud y, si pagas por Bizum, Beatriz la confirma en cuanto lo recibe.</p>
+      <p className="muted" style={{ textAlign: 'center', marginTop: 6 }}>Puedes pagar con tarjeta al momento o por Bizum al {settings.bizumPhone}. La app registra tu solicitud y, si pagas por Bizum, Beatriz la confirma en cuanto lo recibe.</p>
     </>
   );
 }
@@ -683,7 +685,7 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
   function handleAssignBono() {
     const b = bonos.find(x => x.id === bonoId);
     if (!b) { toast('Elige un bono'); return; }
-    const tri = trimestre ? BONO_TRIMESTRE[b.id] : null;
+    const tri = trimestre ? bonoTrimestre(b) : null;
     const realPurchaseDate = purchaseDateStr ? new Date(`${purchaseDateStr}T12:00:00`) : new Date();
     const purchase = {
       id: uid(), studentId: s.id, bonoId: b.id, trimestre: !!tri,
@@ -746,10 +748,10 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
             <option value="">Selecciona un bono</option>
             {bonos.map(b => <option key={b.id} value={b.id}>{b.name} · {b.price}€</option>)}
           </select>
-          {bonoId && BONO_TRIMESTRE[bonoId] && (
+          {bonoId && bonoTrimestre(bonos.find(x => x.id === bonoId)) && (
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
               <input type="checkbox" style={{ width: 'auto' }} checked={trimestre} onChange={e => setTrimestre(e.target.checked)} />
-              Trimestre ({BONO_TRIMESTRE[bonoId].price}€, 3 meses)
+              Trimestre ({bonoTrimestre(bonos.find(x => x.id === bonoId)).price}€, 3 meses)
             </label>
           )}
           <label>Método de pago</label>
@@ -770,11 +772,18 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
 function AdminBonoEditRow({ p, bonos, purchases, savePurchases, toast }) {
   const [editing, setEditing] = useState(false);
   const [classesUsed, setClassesUsed] = useState(p.classesUsed || 0);
+  const [classesTotal, setClassesTotal] = useState(p.classesTotal === null ? '' : p.classesTotal);
+  const [ilimitado, setIlimitado] = useState(p.classesTotal === null);
   const [expiryDateStr, setExpiryDateStr] = useState(() => isoDate(new Date(p.expiryDate)));
 
   function save() {
     const next = purchases.map(x => x.id === p.id
-      ? { ...x, classesUsed: Number(classesUsed) || 0, expiryDate: new Date(`${expiryDateStr}T12:00:00`).toISOString() }
+      ? {
+        ...x,
+        classesUsed: Number(classesUsed) || 0,
+        classesTotal: ilimitado ? null : (Number(classesTotal) || 0),
+        expiryDate: new Date(`${expiryDateStr}T12:00:00`).toISOString()
+      }
       : x);
     savePurchases(next);
     setEditing(false);
@@ -797,8 +806,18 @@ function AdminBonoEditRow({ p, bonos, purchases, savePurchases, toast }) {
       </div>
       {editing ? (
         <>
-          <label>Clases usadas{p.classesTotal !== null ? ` (de ${p.classesTotal})` : ''}</label>
-          <input type="number" min="0" value={classesUsed} onChange={e => setClassesUsed(e.target.value)} disabled={p.classesTotal === null} />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input type="checkbox" style={{ width: 'auto' }} checked={ilimitado} onChange={e => setIlimitado(e.target.checked)} />
+            Clases ilimitadas
+          </label>
+          {!ilimitado && (
+            <>
+              <label>Clases totales (puedes regalar clases extra subiendo este número)</label>
+              <input type="number" min="0" value={classesTotal} onChange={e => setClassesTotal(e.target.value)} />
+            </>
+          )}
+          <label>Clases usadas</label>
+          <input type="number" min="0" value={classesUsed} onChange={e => setClassesUsed(e.target.value)} disabled={ilimitado} />
           <label>Caduca</label>
           <input type="date" value={expiryDateStr} onChange={e => setExpiryDateStr(e.target.value)} />
           <div className="row" style={{ marginTop: 8 }}>
@@ -934,7 +953,7 @@ function AdminEstadisticas({ students, purchases, bookings, bonos }) {
   );
 }
 
-function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, activePurchaseFor, adminToken, schedule, saveSchedule, bonos, saveBonos, savePurchases, saveBookings, saveWallPosts, toast }) {
+function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, activePurchaseFor, adminToken, schedule, saveSchedule, bonos, saveBonos, settings, saveSettings, onAdminLogout, savePurchases, saveBookings, saveWallPosts, toast }) {
   const [alumnaSearch, setAlumnaSearch] = useState('');
   const tabs = [
     { id: 'estadisticas', label: 'Estadísticas' },
@@ -945,7 +964,8 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
     { id: 'horarios', label: 'Horarios' },
     { id: 'gestionbonos', label: 'Gestionar bonos' },
     { id: 'muro', label: 'Publicar en el muro' },
-    { id: 'importar', label: 'Importar alumnas' }
+    { id: 'importar', label: 'Importar alumnas' },
+    { id: 'ajustes', label: 'Ajustes' }
   ];
   return (
     <>
@@ -1082,6 +1102,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
       {adminTab === 'gestionbonos' && <AdminBonos bonos={bonos} saveBonos={saveBonos} toast={toast} />}
       {adminTab === 'muro' && <AdminMuro wallPosts={wallPosts} saveWallPosts={saveWallPosts} adminToken={adminToken} toast={toast} />}
       {adminTab === 'importar' && <AdminImport students={students} saveStudents={saveStudents} toast={toast} />}
+      {adminTab === 'ajustes' && <AdminAjustes settings={settings} saveSettings={saveSettings} adminToken={adminToken} onAdminLogout={onAdminLogout} toast={toast} />}
     </>
   );
 }
@@ -1101,18 +1122,21 @@ function AdminHorarios({ schedule, saveSchedule, toast }) {
 }
 
 function AdminHorarioDay({ day, classes, onChange }) {
+  const settings = useContext(SettingsContext);
   const [editing, setEditing] = useState(null); // índice en edición, o 'new'
   const [time, setTime] = useState('');
   const [name, setName] = useState('');
+  const [capacity, setCapacity] = useState('');
 
-  function startAdd() { setEditing('new'); setTime(''); setName(''); }
-  function startEdit(i) { setEditing(i); setTime(classes[i].time); setName(classes[i].name); }
+  function startAdd() { setEditing('new'); setTime(''); setName(''); setCapacity(''); }
+  function startEdit(i) { setEditing(i); setTime(classes[i].time); setName(classes[i].name); setCapacity(classes[i].capacity ? String(classes[i].capacity) : ''); }
   function cancel() { setEditing(null); }
   function save() {
     if (!time.trim() || !name.trim()) return;
+    const cap = capacity.trim() === '' ? settings.defaultCapacity : (Number(capacity) || settings.defaultCapacity);
     let next;
-    if (editing === 'new') next = [...classes, { time: time.trim(), name: name.trim() }];
-    else next = classes.map((c, i) => i === editing ? { time: time.trim(), name: name.trim() } : c);
+    if (editing === 'new') next = [...classes, { time: time.trim(), name: name.trim(), capacity: cap }];
+    else next = classes.map((c, i) => i === editing ? { time: time.trim(), name: name.trim(), capacity: cap } : c);
     next = [...next].sort((a, b) => a.time.localeCompare(b.time));
     onChange(next);
     setEditing(null);
@@ -1130,12 +1154,13 @@ function AdminHorarioDay({ day, classes, onChange }) {
         <div key={i} className="row" style={{ marginTop: 8, alignItems: 'center' }}>
           <input type="time" value={time} onChange={e => setTime(e.target.value)} style={{ width: 110, flex: 'none' }} />
           <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Nombre de la clase" style={{ width: 'auto', flex: 1 }} />
+          <input type="number" min="1" value={capacity} onChange={e => setCapacity(e.target.value)} placeholder={`Aforo (${settings.defaultCapacity})`} style={{ width: 90, flex: 'none' }} />
           <button className="btn btn-sage btn-sm" onClick={save}>Guardar</button>
           <button className="linklike" onClick={cancel}>Cancelar</button>
         </div>
       ) : (
         <div key={i} className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
-          <span>{c.time} · {c.name}</span>
+          <span>{c.time} · {c.name} · aforo {c.capacity || settings.defaultCapacity}</span>
           <div className="row">
             <button className="linklike" onClick={() => startEdit(i)}>Editar</button>
             <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => remove(i)}>Eliminar</button>
@@ -1146,6 +1171,7 @@ function AdminHorarioDay({ day, classes, onChange }) {
         <div className="row" style={{ marginTop: 10, alignItems: 'center' }}>
           <input type="time" value={time} onChange={e => setTime(e.target.value)} style={{ width: 110, flex: 'none' }} />
           <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Nombre de la clase" style={{ width: 'auto', flex: 1 }} />
+          <input type="number" min="1" value={capacity} onChange={e => setCapacity(e.target.value)} placeholder={`Aforo (${settings.defaultCapacity})`} style={{ width: 90, flex: 'none' }} />
           <button className="btn btn-sage btn-sm" onClick={save}>Añadir</button>
           <button className="linklike" onClick={cancel}>Cancelar</button>
         </div>
@@ -1167,6 +1193,8 @@ function BonoForm({ form, setForm, onSave, onCancel }) {
       <input type="number" value={form.price} onChange={e => setForm({ ...form, price: e.target.value })} placeholder="130" />
       <label>Nº de clases al mes (vacío = ilimitadas)</label>
       <input type="number" value={form.classes} onChange={e => setForm({ ...form, classes: e.target.value })} placeholder="15" />
+      <label>Precio del trimestre, 3 meses (vacío = sin opción de trimestre)</label>
+      <input type="number" value={form.trimestrePrice} onChange={e => setForm({ ...form, trimestrePrice: e.target.value })} placeholder="Ej. 350" />
       <div className="row" style={{ marginTop: 12 }}>
         <button className="btn btn-sage btn-sm" onClick={onSave}>Guardar</button>
         <button className="linklike" onClick={onCancel}>Cancelar</button>
@@ -1177,15 +1205,16 @@ function BonoForm({ form, setForm, onSave, onCancel }) {
 
 function AdminBonos({ bonos, saveBonos, toast }) {
   const [editing, setEditing] = useState(null); // id en edición, o 'new'
-  const [form, setForm] = useState({ name: '', desc: '', price: '', classes: '' });
+  const [form, setForm] = useState({ name: '', desc: '', price: '', classes: '', trimestrePrice: '' });
 
-  function startAdd() { setEditing('new'); setForm({ name: '', desc: '', price: '', classes: '' }); }
-  function startEdit(b) { setEditing(b.id); setForm({ name: b.name, desc: b.desc, price: String(b.price), classes: b.classes === null ? '' : String(b.classes) }); }
+  function startAdd() { setEditing('new'); setForm({ name: '', desc: '', price: '', classes: '', trimestrePrice: '' }); }
+  function startEdit(b) { setEditing(b.id); setForm({ name: b.name, desc: b.desc, price: String(b.price), classes: b.classes === null ? '' : String(b.classes), trimestrePrice: b.trimestrePrice ? String(b.trimestrePrice) : '' }); }
   function cancel() { setEditing(null); }
   function save() {
     if (!form.name.trim() || !form.price) { toast('Nombre y precio son obligatorios'); return; }
     const classesVal = form.classes.trim() === '' ? null : Number(form.classes);
-    const bonoData = { name: form.name.trim(), desc: form.desc.trim(), price: Number(form.price), classes: classesVal };
+    const trimestrePriceVal = form.trimestrePrice.trim() === '' ? undefined : Number(form.trimestrePrice);
+    const bonoData = { name: form.name.trim(), desc: form.desc.trim(), price: Number(form.price), classes: classesVal, trimestrePrice: trimestrePriceVal };
     let next;
     if (editing === 'new') next = [...bonos, { id: uid(), ...bonoData }];
     else next = bonos.map(b => b.id === editing ? { ...b, ...bonoData } : b);
@@ -1211,6 +1240,7 @@ function AdminBonos({ bonos, saveBonos, toast }) {
                 <div>
                   <h3>{b.name}</h3>
                   <p className="muted">{b.desc}</p>
+                  {b.trimestrePrice ? <p className="muted">Trimestre: {b.trimestrePrice}€</p> : null}
                 </div>
                 <div className="serif" style={{ fontSize: 17, fontWeight: 600, color: 'var(--plum)' }}>{b.price}€</div>
               </div>
@@ -1234,11 +1264,38 @@ function AdminBonos({ bonos, saveBonos, toast }) {
 }
 
 function AdminResumen({ students, bookings, saveBookings, schedule, toast }) {
+  const settings = useContext(SettingsContext);
   const [offset, setOffset] = useState(0);
+  const [creatingExtra, setCreatingExtra] = useState(false);
+  const [extraTime, setExtraTime] = useState('');
+  const [extraName, setExtraName] = useState('');
+  const [manualExtras, setManualExtras] = useState([]); // clases puntuales creadas en esta sesión, antes de tener ninguna alumna apuntada
+
   const date = addDays(new Date(), offset);
   const dateIso = isoDate(date);
   const dayName = Object.keys(DAY_INDEX).find(k => DAY_INDEX[k] === date.getDay());
   const classes = schedule[dayName] || [];
+
+  const scheduledKeys = new Set(classes.map(c => `${c.time}|${c.name}`));
+  const extraFromBookings = [];
+  const seenExtra = new Set();
+  bookings.filter(b => b.date === dateIso && b.status !== 'cancelada').forEach(b => {
+    const k = `${b.time}|${b.className}`;
+    if (!scheduledKeys.has(k) && !seenExtra.has(k)) { seenExtra.add(k); extraFromBookings.push({ time: b.time, name: b.className }); }
+  });
+  manualExtras.forEach(c => {
+    const k = `${c.time}|${c.name}`;
+    if (!scheduledKeys.has(k) && !seenExtra.has(k)) { seenExtra.add(k); extraFromBookings.push(c); }
+  });
+  const allClasses = [...classes, ...extraFromBookings].sort((a, b) => a.time.localeCompare(b.time));
+
+  function createExtra() {
+    if (!extraTime.trim() || !extraName.trim()) { toast('Pon hora y nombre de la clase'); return; }
+    setManualExtras([...manualExtras, { time: extraTime.trim(), name: extraName.trim() }]);
+    setCreatingExtra(false);
+    setExtraTime('');
+    setExtraName('');
+  }
 
   return (
     <>
@@ -1250,22 +1307,40 @@ function AdminResumen({ students, bookings, saveBookings, schedule, toast }) {
         </div>
         <button className="btn btn-outline btn-sm" onClick={() => setOffset(offset + 1)}>Siguiente →</button>
       </div>
-      {classes.length === 0 ? (
+      {allClasses.length === 0 ? (
         <div className="empty">No hay clases programadas este día.</div>
-      ) : classes.map((c, idx) => (
+      ) : allClasses.map((c, idx) => (
         <AdminResumenClass key={idx} cls={c} dateIso={dateIso} students={students} bookings={bookings}
           saveBookings={saveBookings} toast={toast} />
       ))}
+      <div className="card">
+        {creatingExtra ? (
+          <>
+            <label>Clase puntual (evento especial, solo para este día)</label>
+            <div className="row" style={{ alignItems: 'center' }}>
+              <input type="time" value={extraTime} onChange={e => setExtraTime(e.target.value)} style={{ width: 110, flex: 'none' }} />
+              <input type="text" value={extraName} onChange={e => setExtraName(e.target.value)} placeholder="Nombre de la clase/evento" style={{ width: 'auto', flex: 1 }} />
+            </div>
+            <div className="row" style={{ marginTop: 8 }}>
+              <button className="btn btn-sage btn-sm" onClick={createExtra}>Crear</button>
+              <button className="linklike" onClick={() => setCreatingExtra(false)}>Cancelar</button>
+            </div>
+          </>
+        ) : (
+          <button className="linklike" onClick={() => setCreatingExtra(true)}>+ Crear clase puntual (evento especial)</button>
+        )}
+      </div>
     </>
   );
 }
 
 function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, toast }) {
+  const settings = useContext(SettingsContext);
   const [adding, setAdding] = useState(false);
   const [search, setSearch] = useState('');
   const [payMethod, setPayMethod] = useState('efectivo');
   const attendees = bookings.filter(b => b.date === dateIso && b.time === c.time && b.className === c.name && b.status !== 'cancelada');
-  const full = attendees.length >= CLASS_CAPACITY;
+  const full = attendees.length >= (c.capacity || settings.defaultCapacity);
 
   const q = search.trim().toLowerCase();
   const matches = q.length < 2 ? [] : students.filter(s =>
@@ -1275,7 +1350,7 @@ function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, 
   function addStudent(s) {
     const booking = {
       id: uid(), studentId: s.id, day: dayNameForDate(new Date(dateIso)), time: c.time, className: c.name,
-      date: dateIso, status: 'confirmada', paymentMethod: payMethod, price: CLASE_SUELTA_PRECIO,
+      date: dateIso, status: 'confirmada', paymentMethod: payMethod, price: settings.claseSueltaPrice,
       createdAt: new Date().toISOString()
     };
     saveBookings([...bookings, booking]);
@@ -1415,6 +1490,7 @@ function AdminMuro({ wallPosts, saveWallPosts, adminToken, toast }) {
 
 /* ---------------- MODALES ---------------- */
 function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases, bonos, me, pickProfile, activePurchaseFor, toast, onClose }) {
+  const settings = useContext(SettingsContext);
   const { day, cls, dateIso } = modal;
 
   function confirmBookingWithBono(purchaseId) {
@@ -1425,17 +1501,17 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
     onClose();
   }
   function confirmBookingSuelta(studentId) {
-    const booking = { id: uid(), studentId, day, time: cls.time, className: cls.name, date: dateIso, status: 'pendiente_pago', paymentMethod: 'bizum', price: CLASE_SUELTA_PRECIO, createdAt: new Date().toISOString() };
+    const booking = { id: uid(), studentId, day, time: cls.time, className: cls.name, date: dateIso, status: 'pendiente_pago', paymentMethod: 'bizum', price: settings.claseSueltaPrice, createdAt: new Date().toISOString() };
     saveBookings([...bookings, booking]);
-    toast(`Reserva registrada. Haz el Bizum al ${BIZUM_PHONE} y Beatriz lo confirmará`);
+    toast(`Reserva registrada. Haz el Bizum al ${settings.bizumPhone} y Beatriz lo confirmará`);
     onClose();
     return booking;
   }
   async function confirmBookingSueltaCard(studentId) {
-    const booking = { id: uid(), studentId, day, time: cls.time, className: cls.name, date: dateIso, status: 'pendiente_pago', paymentMethod: 'redsys', price: CLASE_SUELTA_PRECIO, createdAt: new Date().toISOString() };
+    const booking = { id: uid(), studentId, day, time: cls.time, className: cls.name, date: dateIso, status: 'pendiente_pago', paymentMethod: 'redsys', price: settings.claseSueltaPrice, createdAt: new Date().toISOString() };
     saveBookings([...bookings, booking]);
     try {
-      await payWithRedsys({ kind: 'suelta', itemId: booking.id, studentId, amount: CLASE_SUELTA_PRECIO, concept: `${cls.name} (${day} ${cls.time})` });
+      await payWithRedsys({ kind: 'suelta', itemId: booking.id, studentId, amount: settings.claseSueltaPrice, concept: `${cls.name} (${day} ${cls.time})` });
     } catch (e) {
       toast('No se pudo iniciar el pago con tarjeta. Puedes pagar por Bizum.');
     }
@@ -1443,14 +1519,15 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
 
   let step2 = null;
   if (dateIso) {
+    const capacity = cls.capacity || settings.defaultCapacity;
     const attendeeCount = bookings.filter(b => b.date === dateIso && b.time === cls.time && b.className === cls.name && b.status !== 'cancelada').length;
-    const full = attendeeCount >= CLASS_CAPACITY;
+    const full = attendeeCount >= capacity;
     if (me) {
       const already = bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === cls.time && b.className === cls.name && b.status !== 'cancelada');
       if (already) {
         step2 = <p className="muted" style={{ marginTop: 12 }}>Ya tienes esta clase reservada ese día.</p>;
       } else if (full) {
-        step2 = <p className="muted" style={{ marginTop: 12 }}>Esta clase ya está completa (máximo {CLASS_CAPACITY} alumnas). Elige otra fecha.</p>;
+        step2 = <p className="muted" style={{ marginTop: 12 }}>Esta clase ya está completa (máximo {capacity} alumnas). Elige otra fecha.</p>;
       } else {
         const active = activePurchaseFor(me.id, new Date(dateIso));
         step2 = (
@@ -1463,12 +1540,12 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
               </div>
             ) : <p className="muted">No tienes un bono activo para esta fecha.</p>}
             <div className="optionbox" onClick={() => confirmBookingSueltaCard(me.id)}>
-              <div className="t">Pagar con tarjeta ahora · {CLASE_SUELTA_PRECIO}€</div>
+              <div className="t">Pagar con tarjeta ahora · {settings.claseSueltaPrice}€</div>
               <div className="s">Redirige a la pasarela de pago segura</div>
             </div>
             <div className="optionbox" onClick={() => confirmBookingSuelta(me.id)}>
-              <div className="t">Pagar por Bizum · {CLASE_SUELTA_PRECIO}€</div>
-              <div className="s">Al {BIZUM_PHONE} — Beatriz lo confirma en cuanto lo recibe</div>
+              <div className="t">Pagar por Bizum · {settings.claseSueltaPrice}€</div>
+              <div className="s">Al {settings.bizumPhone} — Beatriz lo confirma en cuanto lo recibe</div>
             </div>
           </>
         );
@@ -1477,7 +1554,7 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
       step2 = (
         <>
           <hr className="sep" />
-          <p className="muted">Esta clase ya está completa (máximo {CLASS_CAPACITY} alumnas). Elige otra fecha.</p>
+          <p className="muted">Esta clase ya está completa (máximo {capacity} alumnas). Elige otra fecha.</p>
         </>
       );
     } else {
@@ -1505,6 +1582,7 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
 }
 
 function NoProfileBookingStep({ dateIso, pickProfile, toast, onConfirmPuntual, onConfirmPuntualCard }) {
+  const settings = useContext(SettingsContext);
   const [path, setPath] = useState(null);
   const [searchPhone, setSearchPhone] = useState('');
   const [searchMsg, setSearchMsg] = useState('');
@@ -1521,7 +1599,7 @@ function NoProfileBookingStep({ dateIso, pickProfile, toast, onConfirmPuntual, o
   return (
     <>
       <hr className="sep" />
-      <p className="muted">Esta clase se paga como clase suelta ({CLASE_SUELTA_PRECIO}€). ¿Cómo quieres reservarla?</p>
+      <p className="muted">Esta clase se paga como clase suelta ({settings.claseSueltaPrice}€). ¿Cómo quieres reservarla?</p>
       <div className="optionbox" onClick={() => setPath('perfil')}>
         <div className="t">Ya tengo perfil</div>
         <div className="s">Buscar mis datos por teléfono</div>
@@ -1565,7 +1643,7 @@ function NoProfileBookingStep({ dateIso, pickProfile, toast, onConfirmPuntual, o
             const quick = await makeQuickStudent();
             setBusy(false);
             onConfirmPuntual(quick.id);
-          }}>Pagar por Bizum al {BIZUM_PHONE}</button>
+          }}>Pagar por Bizum al {settings.bizumPhone}</button>
         </>
       )}
     </>
@@ -1573,9 +1651,10 @@ function NoProfileBookingStep({ dateIso, pickProfile, toast, onConfirmPuntual, o
 }
 
 function BonoModal({ modal, me, purchases, savePurchases, toast, onClose }) {
+  const settings = useContext(SettingsContext);
   const b = modal.bono;
   const trimestre = !!modal.trimestre;
-  const tri = BONO_TRIMESTRE[b.id];
+  const tri = bonoTrimestre(b);
   const price = trimestre && tri ? tri.price : b.price;
   const classesTotal = b.classes === null ? null : (trimestre ? b.classes * 3 : b.classes);
   const termDays = trimestre ? 90 : 30;
@@ -1615,9 +1694,9 @@ function BonoModal({ modal, me, purchases, savePurchases, toast, onClose }) {
         <p className="muted" style={{ textAlign: 'center', margin: '10px 0' }}>o</p>
         <button className="btn btn-ghost" onClick={() => {
           createPendingPurchase('bizum');
-          toast(`Bono solicitado. Haz el Bizum al ${BIZUM_PHONE} y Beatriz lo confirmará`);
+          toast(`Bono solicitado. Haz el Bizum al ${settings.bizumPhone} y Beatriz lo confirmará`);
           onClose();
-        }}>Pagar por Bizum al {BIZUM_PHONE}</button>
+        }}>Pagar por Bizum al {settings.bizumPhone}</button>
       </div>
     </div>
   );
@@ -1754,6 +1833,76 @@ function AdminImport({ students, saveStudents, toast }) {
           </button>
         </>
       )}
+    </>
+  );
+}
+
+function AdminAjustes({ settings, saveSettings, adminToken, onAdminLogout, toast }) {
+  const [form, setForm] = useState({
+    claseSueltaPrice: String(settings.claseSueltaPrice),
+    bizumPhone: settings.bizumPhone,
+    whatsappPhone: settings.whatsappPhone,
+    defaultCapacity: String(settings.defaultCapacity)
+  });
+  const [currentPin, setCurrentPin] = useState('');
+  const [newPin, setNewPin] = useState('');
+  const [newPin2, setNewPin2] = useState('');
+  const [changingPin, setChangingPin] = useState(false);
+
+  function saveGeneral() {
+    saveSettings({
+      claseSueltaPrice: Number(form.claseSueltaPrice) || settings.claseSueltaPrice,
+      bizumPhone: form.bizumPhone.trim(),
+      whatsappPhone: form.whatsappPhone.trim(),
+      defaultCapacity: Number(form.defaultCapacity) || settings.defaultCapacity
+    });
+    toast('Ajustes guardados');
+  }
+
+  async function handleChangePin() {
+    if (!currentPin || !newPin) { toast('Rellena el PIN actual y el nuevo'); return; }
+    if (newPin !== newPin2) { toast('Los dos PIN nuevos no coinciden'); return; }
+    if (newPin.length < 4) { toast('El PIN nuevo debe tener al menos 4 caracteres'); return; }
+    setChangingPin(true);
+    const res = await changeAdminPin(currentPin, newPin, adminToken);
+    setChangingPin(false);
+    if (res.ok) {
+      toast('PIN cambiado correctamente');
+      setCurrentPin(''); setNewPin(''); setNewPin2('');
+    } else {
+      toast(res.error || 'No se pudo cambiar el PIN');
+    }
+  }
+
+  return (
+    <>
+      <div className="sectionlabel" style={{ marginTop: 0 }}>Precios y contacto</div>
+      <div className="card">
+        <label>Precio de clase suelta (€)</label>
+        <input type="number" value={form.claseSueltaPrice} onChange={e => setForm({ ...form, claseSueltaPrice: e.target.value })} />
+        <label>Teléfono de Bizum</label>
+        <input type="text" value={form.bizumPhone} onChange={e => setForm({ ...form, bizumPhone: e.target.value })} />
+        <label>Teléfono de WhatsApp (formato internacional sin +, ej. 34600123456)</label>
+        <input type="text" value={form.whatsappPhone} onChange={e => setForm({ ...form, whatsappPhone: e.target.value })} />
+        <label>Aforo por defecto de una clase</label>
+        <input type="number" value={form.defaultCapacity} onChange={e => setForm({ ...form, defaultCapacity: e.target.value })} />
+        <button className="btn btn-sage btn-sm" style={{ marginTop: 10 }} onClick={saveGeneral}>Guardar ajustes</button>
+      </div>
+
+      <div className="sectionlabel">Seguridad</div>
+      <div className="card">
+        <label>PIN actual</label>
+        <input type="password" value={currentPin} onChange={e => setCurrentPin(e.target.value)} />
+        <label>PIN nuevo</label>
+        <input type="password" value={newPin} onChange={e => setNewPin(e.target.value)} />
+        <label>Repite el PIN nuevo</label>
+        <input type="password" value={newPin2} onChange={e => setNewPin2(e.target.value)} />
+        <button className="btn btn-sage btn-sm" style={{ marginTop: 10 }} disabled={changingPin} onClick={handleChangePin}>
+          {changingPin ? 'Cambiando…' : 'Cambiar PIN'}
+        </button>
+        <hr className="sep" />
+        <button className="linklike" onClick={onAdminLogout}>Cerrar sesión de administradora</button>
+      </div>
     </>
   );
 }

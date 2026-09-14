@@ -44,6 +44,22 @@ export async function adminLogin(pin) {
   }
 }
 
+export async function changeAdminPin(currentPin, newPin, adminToken) {
+  try {
+    const res = await fetch('/api/admin-change-pin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-admin-token': adminToken },
+      body: JSON.stringify({ currentPin, newPin })
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: json.error || 'No se pudo cambiar el PIN' };
+    return { ok: true };
+  } catch (e) {
+    console.error('Error cambiando PIN', e);
+    return { ok: false, error: 'No se pudo cambiar el PIN' };
+  }
+}
+
 // Busca la ficha de UNA alumna por teléfono o id, sin exponer el resto del listado.
 export async function findStudent({ phone, id }) {
   try {

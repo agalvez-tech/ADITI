@@ -2,7 +2,6 @@ import { Redis } from '@upstash/redis';
 
 const redis = Redis.fromEnv();
 const BREVO_API = 'https://api.brevo.com/v3';
-const BONO_NAMES = { bono4: 'Bono 4', bono6: 'Bono 6', bono8: 'Bono 8', bono10: 'Bono 10', bono12: 'Bono 12', ilimitado: 'Bono ilimitado' };
 
 function enabled() {
   return !!process.env.BREVO_API_KEY;
@@ -79,7 +78,9 @@ export async function notifyBonoConfirmado(student, purchase) {
   if (!student) return;
   const purchases = (await redis.get('purchases')) || [];
   await syncStudentContact(student, purchases);
-  const bonoLabel = (BONO_NAMES[purchase.bonoId] || purchase.bonoId) + (purchase.trimestre ? ' (trimestre)' : '');
+  const bonos = (await redis.get('bonos')) || [];
+  const bono = bonos.find(b => b.id === purchase.bonoId);
+  const bonoLabel = (bono ? bono.name : purchase.bonoId) + (purchase.trimestre ? ' (trimestre)' : '');
   await sendEmail(
     student.email,
     '¡Tu bono de Aditi ya está activo!',

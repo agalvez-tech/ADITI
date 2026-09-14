@@ -5,16 +5,16 @@ const redis = Redis.fromEnv();
 
 // Solo se permite leer/escribir estas claves compartidas.
 // Evita que alguien use el endpoint para escribir cualquier cosa en tu Redis.
-const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts', 'schedule', 'bonos'];
+const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts', 'schedule', 'bonos', 'settings'];
 
 // 'students' contiene datos personales de todas las alumnas: ni lectura ni
 // escritura completas sin ser admin (las alumnas usan api/student-profile.js
 // para su propia ficha, así nunca reciben el listado completo).
 const ADMIN_ONLY_READ_KEYS = ['students'];
 
-// 'wallPosts' (el Muro), 'schedule' (horarios) y 'bonos' los lee cualquier
-// alumna, pero solo Beatriz los edita.
-const ADMIN_ONLY_WRITE_KEYS = ['students', 'wallPosts', 'schedule', 'bonos'];
+// 'wallPosts' (el Muro), 'schedule' (horarios), 'bonos' y 'settings' los lee
+// cualquier alumna, pero solo Beatriz los edita.
+const ADMIN_ONLY_WRITE_KEYS = ['students', 'wallPosts', 'schedule', 'bonos', 'settings'];
 
 // Para 'bookings' y 'purchases', las alumnas sí necesitan poder crear su propia
 // reserva/compra sin ser admin. Sin token, solo se permite un cambio mínimo y
@@ -61,8 +61,17 @@ function diffSingleChange(current, next) {
 }
 
 const CLASS_CAPACITY = 8;
+const DAY_INDEX_SERVER = { 0: 'Domingo', 1: 'Lunes', 2: 'Martes', 3: 'Miércoles', 4: 'Jueves', 5: 'Viernes', 6: 'Sábado' };
 
-function isBookingChangeAllowed(diff, current) {
+function classCapacityFor(schedule, item) {
+  if (!schedule || !item?.date) return CLASS_CAPACITY;
+  const dow = new Date(`${item.date}T12:00:00`).getDay();
+  const slots = schedule[DAY_INDEX_SERVER[dow]] || [];
+  const slot = slots.find(s => s.time === item.time && s.name === item.className);
+  return (slot && slot.capacity) || CLASS_CAPACITY;
+}
+
+function isBookingChangeAllowed(diff, current, schedule) {
   if (!diff) return false;
   if (diff.type === 'noop') return true;
   if (diff.type !== 'append') return false; // sin token, no se permite modificar reservas existentes
@@ -74,7 +83,7 @@ function isBookingChangeAllowed(diff, current) {
   const occupied = (Array.isArray(current) ? current : [])
     .filter(b => b.date === item.date && b.time === item.time && b.className === item.className && b.status !== 'cancelada')
     .length;
-  return occupied < CLASS_CAPACITY;
+  return occupied < classCapacityFor(schedule, item);
 }
 
 function isPurchaseChangeAllowed(diff) {
@@ -180,7 +189,13 @@ export default async function handler(req, res) {
       const diff = needsDiff ? diffSingleChange(current, value) : null;
 
       if (!admin && (key === 'bookings' || key === 'purchases')) {
-        const allowed = key === 'bookings' ? isBookingChangeAllowed(diff, current) : isPurchaseChangeAllowed(diff);
+        let allowed;
+        if (key === 'bookings') {
+          const schedule = await redis.get('schedule');
+          allowed = isBookingChangeAllowed(diff, current, schedule);
+        } else {
+          allowed = isPurchaseChangeAllowed(diff);
+        }
         if (!allowed) {
           return res.status(403).json({ error: 'Cambio no permitido' });
         }
