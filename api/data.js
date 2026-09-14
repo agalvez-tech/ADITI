@@ -134,8 +134,8 @@ async function runBrevoSideEffects(key, value, diff) {
     await notifySueltaConfirmada(student, diff.after);
     return;
   }
-  if (key === 'bookings' && diff?.type === 'append' && diff.item.status === 'confirmada' && diff.item.paymentMethod === 'efectivo') {
-    // Alta manual de una clase ya pagada en efectivo, hecha por Beatriz.
+  if (key === 'bookings' && diff?.type === 'append' && diff.item.status === 'confirmada' && (diff.item.paymentMethod === 'efectivo' || diff.item.paymentMethod === 'transferencia')) {
+    // Alta manual de una clase ya pagada en efectivo o transferencia, hecha por Beatriz.
     const students = (await redis.get('students')) || [];
     const student = students.find(s => s.id === diff.item.studentId);
     await notifySueltaConfirmada(student, diff.item);

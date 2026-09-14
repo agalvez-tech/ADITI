@@ -91,6 +91,9 @@ function mondayIndex(d) { return (d.getDay() + 6) % 7; } // Lunes=0 ... Domingo=
 function startOfWeekMonday(d) { return addDays(d, -mondayIndex(d)); }
 function dayNameForDate(d) { return Object.keys(DAY_INDEX).find(k => DAY_INDEX[k] === d.getDay()) || ''; }
 function bonoName(bonos, id) { const b = (bonos || DEFAULT_BONOS).find(x => x.id === id); return b ? b.name : id; }
+function hasActiveBonoAt(purchases, studentId, onDate) {
+  return purchases.some(p => p.studentId === studentId && p.status === 'confirmado' && new Date(p.expiryDate) >= onDate && (p.classesTotal === null || p.classesUsed < p.classesTotal));
+}
 function capitalizeFirst(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 
 export default function App() {
@@ -660,6 +663,7 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
   const [assigningBono, setAssigningBono] = useState(false);
   const [bonoId, setBonoId] = useState('');
   const [trimestre, setTrimestre] = useState(false);
+  const [payMethod, setPayMethod] = useState('efectivo');
 
   function handleSave(data, error) {
     if (error) { toast(error); return; }
@@ -682,14 +686,14 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
       id: uid(), studentId: s.id, bonoId: b.id, trimestre: !!tri,
       price: tri ? tri.price : b.price,
       classesTotal: b.classes === null ? null : (tri ? b.classes * 3 : b.classes),
-      classesUsed: 0, status: 'confirmado', paymentMethod: 'efectivo',
+      classesUsed: 0, status: 'confirmado', paymentMethod: payMethod,
       purchaseDate: new Date().toISOString(), expiryDate: addDays(new Date(), tri ? 90 : 30).toISOString()
     };
     savePurchases([...purchases, purchase]);
     setAssigningBono(false);
     setBonoId('');
     setTrimestre(false);
-    toast(`${b.name} dado de alta en efectivo para ${s.name}`);
+    toast(`${b.name} dado de alta (${payMethod}) para ${s.name}`);
   }
 
   if (editing) {
@@ -718,7 +722,7 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
       </div>
       {assigningBono && (
         <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
-          <label>Bono pagado en efectivo</label>
+          <label>Bono ya pagado (fuera de la app)</label>
           <select value={bonoId} onChange={e => setBonoId(e.target.value)}>
             <option value="">Selecciona un bono</option>
             {bonos.map(b => <option key={b.id} value={b.id}>{b.name} · {b.price}€</option>)}
@@ -729,6 +733,11 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
               Trimestre ({BONO_TRIMESTRE[bonoId].price}€, 3 meses)
             </label>
           )}
+          <label>Método de pago</label>
+          <select value={payMethod} onChange={e => setPayMethod(e.target.value)}>
+            <option value="efectivo">Efectivo</option>
+            <option value="transferencia">Transferencia</option>
+          </select>
           <button className="btn btn-sage btn-sm" style={{ marginTop: 10 }} onClick={handleAssignBono}>Confirmar alta</button>
         </div>
       )}
@@ -736,9 +745,96 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
   );
 }
 
+const PAYMENT_LABELS = { redsys: 'Tarjeta', bizum: 'Bizum', efectivo: 'Efectivo', transferencia: 'Transferencia' };
+
+function AdminEstadisticas({ students, purchases, bookings, bonos }) {
+  const [period, setPeriod] = useState('mes');
+  const now = new Date();
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  function inPeriod(dateStr) {
+    if (period === 'todo') return true;
+    return dateStr && new Date(dateStr) >= startOfMonth;
+  }
+
+  const paidPurchases = purchases.filter(p => p.status === 'confirmado' && inPeriod(p.purchaseDate));
+  const paidBookings = bookings.filter(b => b.status === 'confirmada' && b.paymentMethod !== 'bono' && inPeriod(b.createdAt));
+
+  const revenueByMethod = {};
+  let totalBonos = 0, totalSueltas = 0;
+  paidPurchases.forEach(p => { revenueByMethod[p.paymentMethod] = (revenueByMethod[p.paymentMethod] || 0) + (p.price || 0); totalBonos += p.price || 0; });
+  paidBookings.forEach(b => { revenueByMethod[b.paymentMethod] = (revenueByMethod[b.paymentMethod] || 0) + (b.price || 0); totalSueltas += b.price || 0; });
+  const totalRevenue = totalBonos + totalSueltas;
+
+  const conBono = students.filter(s => !s.isPuntual && hasActiveBonoAt(purchases, s.id, now)).length;
+  const sinBono = students.filter(s => !s.isPuntual && !hasActiveBonoAt(purchases, s.id, now)).length;
+  const puntuales = students.filter(s => s.isPuntual).length;
+
+  const classCount = {};
+  bookings.filter(b => b.status === 'confirmada' && inPeriod(b.createdAt)).forEach(b => {
+    classCount[b.className] = (classCount[b.className] || 0) + 1;
+  });
+  const topClasses = Object.entries(classCount).sort((a, b) => b[1] - a[1]).slice(0, 8);
+
+  const bonoCount = {};
+  purchases.filter(p => p.status === 'confirmado' && new Date(p.expiryDate) >= now).forEach(p => {
+    bonoCount[p.bonoId] = (bonoCount[p.bonoId] || 0) + 1;
+  });
+  const topBonos = Object.entries(bonoCount).sort((a, b) => b[1] - a[1]);
+
+  return (
+    <>
+      <div className="daychips">
+        <div className={`chip ${period === 'mes' ? 'active' : ''}`} onClick={() => setPeriod('mes')}>Este mes</div>
+        <div className={`chip ${period === 'todo' ? 'active' : ''}`} onClick={() => setPeriod('todo')}>Histórico</div>
+      </div>
+
+      <div className="sectionlabel">Facturación {period === 'mes' ? 'de este mes' : 'histórica'}</div>
+      <div className="card">
+        <div className="serif" style={{ fontSize: 30, fontWeight: 700, color: 'var(--plum)' }}>{totalRevenue}€</div>
+        <p className="muted" style={{ marginTop: 4 }}>Bonos: {totalBonos}€ · Clases sueltas: {totalSueltas}€</p>
+        <div className="row" style={{ marginTop: 10 }}>
+          {Object.keys(PAYMENT_LABELS).map(k => revenueByMethod[k] ? (
+            <span key={k} className="pill pill-lav">{PAYMENT_LABELS[k]}: {revenueByMethod[k]}€</span>
+          ) : null)}
+          {totalRevenue === 0 && <span className="muted">Sin ingresos registrados en este periodo.</span>}
+        </div>
+      </div>
+
+      <div className="sectionlabel">Alumnas</div>
+      <div className="card">
+        <div className="row">
+          <span className="pill pill-sage">{conBono} con bono activo</span>
+          <span className="pill pill-gray">{sinBono} sin bono activo</span>
+          <span className="pill pill-peach">{puntuales} puntuales</span>
+        </div>
+        <p className="muted" style={{ marginTop: 10 }}>{students.length} alumnas registradas en total.</p>
+      </div>
+
+      <div className="sectionlabel">Clases más populares {period === 'mes' ? '(este mes)' : '(histórico)'}</div>
+      {topClasses.length === 0 ? <div className="empty">Todavía no hay reservas confirmadas en este periodo.</div> :
+        topClasses.map(([name, count]) => (
+          <div className="card" key={name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>{name}</span>
+            <span className="pill pill-lav">{count} reserva{count === 1 ? '' : 's'}</span>
+          </div>
+        ))}
+
+      <div className="sectionlabel">Bonos activos por tipo</div>
+      {topBonos.length === 0 ? <div className="empty">No hay bonos activos ahora mismo.</div> :
+        topBonos.map(([id, count]) => (
+          <div className="card" key={id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>{bonoName(bonos, id)}</span>
+            <span className="pill pill-sage">{count} activo{count === 1 ? '' : 's'}</span>
+          </div>
+        ))}
+    </>
+  );
+}
+
 function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, activePurchaseFor, adminToken, schedule, saveSchedule, bonos, saveBonos, savePurchases, saveBookings, saveWallPosts, toast }) {
   const [alumnaSearch, setAlumnaSearch] = useState('');
   const tabs = [
+    { id: 'estadisticas', label: 'Estadísticas' },
     { id: 'resumen', label: 'Resumen del día' },
     { id: 'alumnas', label: 'Alumnas' },
     { id: 'bonospend', label: 'Bonos pendientes' },
@@ -755,6 +851,9 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
           <div key={t.id} className={`chip ${adminTab === t.id ? 'active' : ''}`} onClick={() => setAdminTab(t.id)}>{t.label}</div>
         ))}
       </div>
+      {adminTab === 'estadisticas' && (
+        <AdminEstadisticas students={students} purchases={purchases} bookings={bookings} bonos={bonos} />
+      )}
       {adminTab === 'resumen' && (
         <AdminResumen students={students} bookings={bookings} saveBookings={saveBookings} schedule={schedule} toast={toast} />
       )}
@@ -1060,6 +1159,7 @@ function AdminResumen({ students, bookings, saveBookings, schedule, toast }) {
 function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, toast }) {
   const [adding, setAdding] = useState(false);
   const [search, setSearch] = useState('');
+  const [payMethod, setPayMethod] = useState('efectivo');
   const attendees = bookings.filter(b => b.date === dateIso && b.time === c.time && b.className === c.name && b.status !== 'cancelada');
   const full = attendees.length >= CLASS_CAPACITY;
 
@@ -1071,13 +1171,13 @@ function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, 
   function addStudent(s) {
     const booking = {
       id: uid(), studentId: s.id, day: dayNameForDate(new Date(dateIso)), time: c.time, className: c.name,
-      date: dateIso, status: 'confirmada', paymentMethod: 'efectivo', price: CLASE_SUELTA_PRECIO,
+      date: dateIso, status: 'confirmada', paymentMethod: payMethod, price: CLASE_SUELTA_PRECIO,
       createdAt: new Date().toISOString()
     };
     saveBookings([...bookings, booking]);
     setAdding(false);
     setSearch('');
-    toast(`${s.name} añadida a ${c.name} (efectivo)`);
+    toast(`${s.name} añadida a ${c.name} (${payMethod})`);
   }
 
   return (
@@ -1098,6 +1198,7 @@ function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, 
                 <span>{s ? s.name : 'Alumna eliminada'}</span>
                 {b.status === 'pendiente_pago' && <span className="pill pill-gray">Pago pendiente</span>}
                 {b.paymentMethod === 'efectivo' && <span className="pill pill-sage">Efectivo</span>}
+                {b.paymentMethod === 'transferencia' && <span className="pill pill-sage">Transferencia</span>}
                 <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => {
                   saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'cancelada' } : x));
                   toast('Reserva cancelada');
@@ -1111,6 +1212,10 @@ function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, 
         <p className="muted" style={{ marginTop: 10 }}>Clase completa, no se puede añadir a nadie más.</p>
       ) : adding ? (
         <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
+          <select value={payMethod} onChange={e => setPayMethod(e.target.value)} style={{ marginBottom: 8 }}>
+            <option value="efectivo">Efectivo</option>
+            <option value="transferencia">Transferencia</option>
+          </select>
           <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar alumna por nombre o teléfono…" autoFocus />
           {q.length >= 2 && matches.length === 0 && <p className="muted" style={{ marginTop: 6 }}>Sin resultados.</p>}
           {matches.map(s => (
