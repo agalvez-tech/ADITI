@@ -664,6 +664,7 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
   const [bonoId, setBonoId] = useState('');
   const [trimestre, setTrimestre] = useState(false);
   const [payMethod, setPayMethod] = useState('efectivo');
+  const [purchaseDateStr, setPurchaseDateStr] = useState(() => isoDate(new Date()));
 
   function handleSave(data, error) {
     if (error) { toast(error); return; }
@@ -682,17 +683,19 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
     const b = bonos.find(x => x.id === bonoId);
     if (!b) { toast('Elige un bono'); return; }
     const tri = trimestre ? BONO_TRIMESTRE[b.id] : null;
+    const realPurchaseDate = purchaseDateStr ? new Date(`${purchaseDateStr}T12:00:00`) : new Date();
     const purchase = {
       id: uid(), studentId: s.id, bonoId: b.id, trimestre: !!tri,
       price: tri ? tri.price : b.price,
       classesTotal: b.classes === null ? null : (tri ? b.classes * 3 : b.classes),
       classesUsed: 0, status: 'confirmado', paymentMethod: payMethod,
-      purchaseDate: new Date().toISOString(), expiryDate: addDays(new Date(), tri ? 90 : 30).toISOString()
+      purchaseDate: realPurchaseDate.toISOString(), expiryDate: addDays(realPurchaseDate, tri ? 90 : 30).toISOString()
     };
     savePurchases([...purchases, purchase]);
     setAssigningBono(false);
     setBonoId('');
     setTrimestre(false);
+    setPurchaseDateStr(isoDate(new Date()));
     toast(`${b.name} dado de alta (${payMethod}) para ${s.name}`);
   }
 
@@ -738,6 +741,9 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
             <option value="efectivo">Efectivo</option>
             <option value="transferencia">Transferencia</option>
           </select>
+          <label>Fecha real de la compra</label>
+          <input type="date" value={purchaseDateStr} max={isoDate(new Date())} onChange={e => setPurchaseDateStr(e.target.value)} />
+          <p className="muted" style={{ marginTop: 4 }}>El bono caduca 30 (o 90 si es trimestre) días después de esta fecha, no de hoy.</p>
           <button className="btn btn-sage btn-sm" style={{ marginTop: 10 }} onClick={handleAssignBono}>Confirmar alta</button>
         </div>
       )}
