@@ -96,6 +96,25 @@ function slotDuration(c) { return c.duration || 60; }
 const STATUS_LABELS = { confirmada: 'Confirmada', pendiente_pago: 'Pendiente de pago', cancelada: 'Cancelada', en_espera: 'En lista de espera' };
 const RECURRING_WEEKS = 10; // nº de semanas que se crean de golpe al añadir una alumna "fija"
 
+// Cancelar con menos de estas horas de antelación no devuelve la clase al bono.
+const LATE_CANCEL_HOURS = 3;
+function classDateTime(b) { return new Date(`${b.date}T${b.time}`); }
+function isLateCancel(b) { return (classDateTime(b) - new Date()) / 3600000 < LATE_CANCEL_HOURS; }
+
+// Cancela una reserva. Si se pagó con bono y se cancela con menos de
+// LATE_CANCEL_HOURS de antelación, la clase se queda descontada del bono
+// (penalización); con más antelación, se le devuelve la clase al bono.
+// Devuelve true si ha sido una cancelación tardía (para avisar al usuario).
+function cancelBookingAndRefund(b, bookings, saveBookings, purchases, savePurchases) {
+  const late = isLateCancel(b);
+  saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'cancelada' } : x));
+  if (!late && b.paymentMethod === 'bono' && b.purchaseId && purchases && savePurchases) {
+    // Los bonos ilimitados (classesTotal null) no descuentan clases al reservar, así que tampoco hay nada que devolver.
+    savePurchases(purchases.map(p => p.id === b.purchaseId && p.classesTotal !== null ? { ...p, classesUsed: Math.max(0, (p.classesUsed || 0) - 1) } : p));
+  }
+  return late;
+}
+
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('muro');
@@ -214,7 +233,7 @@ export default function App() {
             }} />
         ) : tab === 'perfil' ? (
           <PerfilTab me={me} pickProfile={pickProfile} clearProfile={clearProfile} bonos={bonos}
-            purchases={purchases} bookings={bookings} saveBookings={saveBookings} activePurchaseFor={activePurchaseFor}
+            purchases={purchases} savePurchases={savePurchases} bookings={bookings} saveBookings={saveBookings} activePurchaseFor={activePurchaseFor}
             isAdmin={isAdmin} onAdminLogin={loginAdmin} onAdminLogout={logoutAdmin} setTab={setTab} toast={toast} />
         ) : tab === 'admin' ? (
           <AdminTab adminTab={adminTab} setAdminTab={setAdminTab}
@@ -573,7 +592,7 @@ function MyBonoCard({ me, purchases, activePurchaseFor, bonos }) {
   );
 }
 
-function MyUpcomingBookings({ me, bookings, saveBookings, toast }) {
+function MyUpcomingBookings({ me, bookings, saveBookings, purchases, savePurchases, toast }) {
   const upcoming = bookings
     .filter(b => b.studentId === me.id && b.status !== 'cancelada' && new Date(b.date) >= addDays(new Date(), -1))
     .sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -581,31 +600,43 @@ function MyUpcomingBookings({ me, bookings, saveBookings, toast }) {
   if (upcoming.length === 0) return null;
 
   function cancelBooking(b) {
-    if (!confirm(`¿Cancelar tu reserva de ${b.className} el ${fmtDate(new Date(b.date))}?`)) return;
-    saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'cancelada' } : x));
-    toast('Reserva cancelada');
+    const atRisk = b.paymentMethod === 'bono' && isLateCancel(b);
+    const msg = atRisk
+      ? `¿Cancelar tu reserva de ${b.className} el ${fmtDate(new Date(b.date))}?\n\nComo faltan menos de ${LATE_CANCEL_HOURS} horas para la clase, se descontará igualmente de tu bono.`
+      : `¿Cancelar tu reserva de ${b.className} el ${fmtDate(new Date(b.date))}?`;
+    if (!confirm(msg)) return;
+    const late = cancelBookingAndRefund(b, bookings, saveBookings, purchases, savePurchases);
+    toast(late && b.paymentMethod === 'bono' ? 'Reserva cancelada. Se ha descontado del bono por ser con poca antelación.' : 'Reserva cancelada');
   }
 
   return (
     <>
       <div className="sectionlabel">Mis próximas clases</div>
-      {upcoming.map(b => (
-        <div className="card" key={b.id}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <h3>{b.className}</h3>
-              <p className="muted">{fmtDate(new Date(b.date))} · {b.time}</p>
+      {upcoming.map(b => {
+        const atRisk = b.status !== 'cancelada' && b.paymentMethod === 'bono' && isLateCancel(b);
+        return (
+          <div className="card" key={b.id}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h3>{b.className}</h3>
+                <p className="muted">{fmtDate(new Date(b.date))} · {b.time}</p>
+              </div>
+              <span className={`pill ${b.status === 'confirmada' ? 'pill-sage' : b.status === 'en_espera' ? 'pill-peach' : 'pill-gray'}`}>{STATUS_LABELS[b.status] || b.status}</span>
             </div>
-            <span className={`pill ${b.status === 'confirmada' ? 'pill-sage' : b.status === 'en_espera' ? 'pill-peach' : 'pill-gray'}`}>{STATUS_LABELS[b.status] || b.status}</span>
+            {atRisk && (
+              <p className="muted" style={{ marginTop: 8, color: 'var(--danger)' }}>
+                Quedan menos de {LATE_CANCEL_HOURS}h: si cancelas ahora, esta clase se descuenta igualmente de tu bono.
+              </p>
+            )}
+            <button className="linklike" style={{ color: 'var(--danger)', marginTop: 8 }} onClick={() => cancelBooking(b)}>Cancelar reserva</button>
           </div>
-          <button className="linklike" style={{ color: 'var(--danger)', marginTop: 8 }} onClick={() => cancelBooking(b)}>Cancelar reserva</button>
-        </div>
-      ))}
+        );
+      })}
     </>
   );
 }
 
-function PerfilTab({ me, pickProfile, clearProfile, purchases, bookings, saveBookings, activePurchaseFor, bonos, isAdmin, onAdminLogin, onAdminLogout, setTab, toast }) {
+function PerfilTab({ me, pickProfile, clearProfile, purchases, savePurchases, bookings, saveBookings, activePurchaseFor, bonos, isAdmin, onAdminLogin, onAdminLogout, setTab, toast }) {
   const [searchPhone, setSearchPhone] = useState('');
   const [searching, setSearching] = useState(false);
 
@@ -638,7 +669,7 @@ function PerfilTab({ me, pickProfile, clearProfile, purchases, bookings, saveBoo
             <p className="muted">Cómo nos conoció: {me.howFound || '—'}</p>
           </div>
           <MyBonoCard me={me} purchases={purchases} activePurchaseFor={activePurchaseFor} bonos={bonos} />
-          <MyUpcomingBookings me={me} bookings={bookings} saveBookings={saveBookings} toast={toast} />
+          <MyUpcomingBookings me={me} bookings={bookings} saveBookings={saveBookings} purchases={purchases} savePurchases={savePurchases} toast={toast} />
           <div className="sectionlabel">Editar datos</div>
           <ProfileForm existing={me} onSave={handleSave} />
           <hr className="sep" />
@@ -751,7 +782,7 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
           {bookings.filter(b => b.studentId === s.id).length === 0 ? <p className="muted">Sin reservas todavía.</p> :
             [...bookings].filter(b => b.studentId === s.id)
               .sort((a, b) => new Date(b.date) - new Date(a.date))
-              .map(b => <AdminReservaEditRow key={b.id} b={b} bookings={bookings} saveBookings={saveBookings} toast={toast} />)}
+              .map(b => <AdminReservaEditRow key={b.id} b={b} bookings={bookings} saveBookings={saveBookings} purchases={purchases} savePurchases={savePurchases} toast={toast} />)}
         </div>
       )}
       {assigningBono && (
@@ -852,16 +883,20 @@ function AdminBonoEditRow({ p, bonos, purchases, savePurchases, toast }) {
   );
 }
 
-function AdminReservaEditRow({ b, bookings, saveBookings, toast }) {
+function AdminReservaEditRow({ b, bookings, saveBookings, purchases, savePurchases, toast }) {
   const [editing, setEditing] = useState(false);
   const [dateStr, setDateStr] = useState(() => isoDate(new Date(b.date)));
   const [time, setTime] = useState(b.time);
   const [className, setClassName] = useState(b.className);
 
   function cancelBooking() {
-    if (!confirm(`¿Cancelar esta reserva (${b.className}, ${fmtDate(new Date(b.date))})?`)) return;
-    saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'cancelada' } : x));
-    toast('Reserva cancelada');
+    const atRisk = b.paymentMethod === 'bono' && isLateCancel(b);
+    const msg = atRisk
+      ? `¿Cancelar esta reserva (${b.className}, ${fmtDate(new Date(b.date))})?\n\nComo faltan menos de ${LATE_CANCEL_HOURS} horas, se descontará igualmente del bono.`
+      : `¿Cancelar esta reserva (${b.className}, ${fmtDate(new Date(b.date))})?`;
+    if (!confirm(msg)) return;
+    const late = cancelBookingAndRefund(b, bookings, saveBookings, purchases, savePurchases);
+    toast(late && b.paymentMethod === 'bono' ? 'Reserva cancelada. Se ha descontado del bono por ser con poca antelación.' : 'Reserva cancelada');
   }
   function markPaid() {
     saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'confirmada' } : x));
@@ -1687,7 +1722,7 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
   function confirmBookingWithBono(purchaseId) {
     const next = purchases.map(p => p.id === purchaseId ? { ...p, classesUsed: (p.classesUsed || 0) + (p.classesTotal === null ? 0 : 1) } : p);
     savePurchases(next);
-    saveBookings([...bookings, { id: uid(), studentId: me.id, day, time: cls.time, className: cls.name, date: dateIso, status: 'confirmada', paymentMethod: 'bono', createdAt: new Date().toISOString() }]);
+    saveBookings([...bookings, { id: uid(), studentId: me.id, day, time: cls.time, className: cls.name, date: dateIso, status: 'confirmada', paymentMethod: 'bono', purchaseId, createdAt: new Date().toISOString() }]);
     toast('Clase reservada con tu bono');
     onClose();
   }
