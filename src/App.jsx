@@ -364,15 +364,19 @@ function HorarioTab({ bookings, schedule, onPickClass }) {
             {classes.length === 0 ? (
               <div className="muted" style={{ padding: '4px 0 8px' }}>Sin clases este día.</div>
             ) : classes.map((c, idx) => {
+              const cap = c.capacity || settings.defaultCapacity;
               const attendees = bookings.filter(b => b.date === dateIso && b.time === c.time && b.className === c.name && occupiesSpot(b.status)).length;
-              const full = attendees >= (c.capacity || settings.defaultCapacity);
+              const full = attendees >= cap;
               return (
                 <div className="classcard" key={idx} onClick={() => onPickClass(c, dateIso, dayName)}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
                     <div className="time">{c.time}</div>
                     <div className="name">{c.name}</div>
                   </div>
-                  <span className={`pill ${full ? 'pill-gray' : (CLASS_STYLE[c.name] || 'pill-lav')}`}>{full ? 'Completo' : 'Reservar'}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span className="muted" style={{ fontSize: 12 }}>{attendees}/{cap}</span>
+                    <span className={`pill ${full ? 'pill-gray' : (CLASS_STYLE[c.name] || 'pill-lav')}`}>{full ? 'Completo' : 'Reservar'}</span>
+                  </div>
                 </div>
               );
             })}
@@ -1743,10 +1747,11 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
     }
   }
 
+  const capacity = cls.capacity || settings.defaultCapacity;
+  const attendeeCount = dateIso ? bookings.filter(b => b.date === dateIso && b.time === cls.time && b.className === cls.name && occupiesSpot(b.status)).length : 0;
+
   let step2 = null;
   if (dateIso) {
-    const capacity = cls.capacity || settings.defaultCapacity;
-    const attendeeCount = bookings.filter(b => b.date === dateIso && b.time === cls.time && b.className === cls.name && occupiesSpot(b.status)).length;
     const full = attendeeCount >= capacity;
     if (me) {
       const already = bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === cls.time && b.className === cls.name && occupiesSpot(b.status));
@@ -1800,7 +1805,7 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
       <div className="modal-sheet">
         <button className="modal-close" onClick={onClose}>×</button>
         <h3>{cls.name} · {cls.time}</h3>
-        <p className="muted">{fmtDate(new Date(dateIso))}</p>
+        <p className="muted">{fmtDate(new Date(dateIso))}{dateIso && ` · ${attendeeCount}/${capacity} apuntadas`}</p>
         {step2}
       </div>
     </div>
