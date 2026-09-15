@@ -208,7 +208,7 @@ export default function App() {
             }} />
         ) : tab === 'perfil' ? (
           <PerfilTab me={me} pickProfile={pickProfile} clearProfile={clearProfile} bonos={bonos}
-            purchases={purchases} bookings={bookings} activePurchaseFor={activePurchaseFor}
+            purchases={purchases} bookings={bookings} saveBookings={saveBookings} activePurchaseFor={activePurchaseFor}
             isAdmin={isAdmin} onAdminLogin={loginAdmin} onAdminLogout={logoutAdmin} setTab={setTab} toast={toast} />
         ) : tab === 'admin' ? (
           <AdminTab adminTab={adminTab} setAdminTab={setAdminTab}
@@ -567,7 +567,7 @@ function MyBonoCard({ me, purchases, activePurchaseFor, bonos }) {
   );
 }
 
-function MyUpcomingBookings({ me, bookings }) {
+function MyUpcomingBookings({ me, bookings, saveBookings, toast }) {
   const upcoming = bookings
     .filter(b => b.studentId === me.id && b.status !== 'cancelada' && new Date(b.date) >= addDays(new Date(), -1))
     .sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -576,23 +576,32 @@ function MyUpcomingBookings({ me, bookings }) {
 
   const statusLabel = { confirmada: 'Confirmada', pendiente_pago: 'Pendiente de pago' };
 
+  function cancelBooking(b) {
+    if (!confirm(`¿Cancelar tu reserva de ${b.className} el ${fmtDate(new Date(b.date))}?`)) return;
+    saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'cancelada' } : x));
+    toast('Reserva cancelada');
+  }
+
   return (
     <>
       <div className="sectionlabel">Mis próximas clases</div>
       {upcoming.map(b => (
-        <div className="card" key={b.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <h3>{b.className}</h3>
-            <p className="muted">{fmtDate(new Date(b.date))} · {b.time}</p>
+        <div className="card" key={b.id}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <h3>{b.className}</h3>
+              <p className="muted">{fmtDate(new Date(b.date))} · {b.time}</p>
+            </div>
+            <span className={`pill ${b.status === 'confirmada' ? 'pill-sage' : 'pill-gray'}`}>{statusLabel[b.status] || b.status}</span>
           </div>
-          <span className={`pill ${b.status === 'confirmada' ? 'pill-sage' : 'pill-gray'}`}>{statusLabel[b.status] || b.status}</span>
+          <button className="linklike" style={{ color: 'var(--danger)', marginTop: 8 }} onClick={() => cancelBooking(b)}>Cancelar reserva</button>
         </div>
       ))}
     </>
   );
 }
 
-function PerfilTab({ me, pickProfile, clearProfile, purchases, bookings, activePurchaseFor, bonos, isAdmin, onAdminLogin, onAdminLogout, setTab, toast }) {
+function PerfilTab({ me, pickProfile, clearProfile, purchases, bookings, saveBookings, activePurchaseFor, bonos, isAdmin, onAdminLogin, onAdminLogout, setTab, toast }) {
   const [searchPhone, setSearchPhone] = useState('');
   const [searching, setSearching] = useState(false);
 
@@ -625,7 +634,7 @@ function PerfilTab({ me, pickProfile, clearProfile, purchases, bookings, activeP
             <p className="muted">Cómo nos conoció: {me.howFound || '—'}</p>
           </div>
           <MyBonoCard me={me} purchases={purchases} activePurchaseFor={activePurchaseFor} bonos={bonos} />
-          <MyUpcomingBookings me={me} bookings={bookings} />
+          <MyUpcomingBookings me={me} bookings={bookings} saveBookings={saveBookings} toast={toast} />
           <div className="sectionlabel">Editar datos</div>
           <ProfileForm existing={me} onSave={handleSave} />
           <hr className="sep" />
@@ -840,6 +849,11 @@ function AdminBonoEditRow({ p, bonos, purchases, savePurchases, toast }) {
 }
 
 function AdminReservaEditRow({ b, bookings, saveBookings, toast }) {
+  const [editing, setEditing] = useState(false);
+  const [dateStr, setDateStr] = useState(() => isoDate(new Date(b.date)));
+  const [time, setTime] = useState(b.time);
+  const [className, setClassName] = useState(b.className);
+
   function cancelBooking() {
     if (!confirm(`¿Cancelar esta reserva (${b.className}, ${fmtDate(new Date(b.date))})?`)) return;
     saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'cancelada' } : x));
@@ -849,8 +863,17 @@ function AdminReservaEditRow({ b, bookings, saveBookings, toast }) {
     saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'confirmada' } : x));
     toast('Reserva marcada como pagada');
   }
+  function saveMove() {
+    if (!dateStr || !time.trim() || !className.trim()) { toast('Rellena fecha, hora y clase'); return; }
+    saveBookings(bookings.map(x => x.id === b.id
+      ? { ...x, date: dateStr, time: time.trim(), className: className.trim(), day: dayNameForDate(new Date(`${dateStr}T12:00:00`)) }
+      : x));
+    setEditing(false);
+    toast('Reserva movida');
+  }
 
   const statusPill = b.status === 'confirmada' ? 'pill-sage' : b.status === 'pendiente_pago' ? 'pill-lav' : 'pill-gray';
+  const otherAttendees = bookings.filter(x => x.id !== b.id && x.date === dateStr && x.time === time && x.className === className && x.status !== 'cancelada').length;
 
   return (
     <div className="card" style={{ marginTop: 8 }}>
@@ -858,11 +881,30 @@ function AdminReservaEditRow({ b, bookings, saveBookings, toast }) {
         <h3 style={{ margin: 0 }}>{b.className}</h3>
         <span className={`pill ${statusPill}`}>{b.status}</span>
       </div>
-      <p className="muted">{fmtDate(new Date(b.date))} · {b.time} · {b.paymentMethod === 'bono' ? 'Con bono' : (PAYMENT_LABELS[b.paymentMethod] || b.paymentMethod)}</p>
-      <div className="row" style={{ marginTop: 8 }}>
-        {b.status === 'pendiente_pago' && <button className="btn btn-sage btn-sm" onClick={markPaid}>Marcar pagada</button>}
-        {b.status !== 'cancelada' && <button className="linklike" style={{ color: 'var(--danger)' }} onClick={cancelBooking}>Cancelar</button>}
-      </div>
+      {editing ? (
+        <>
+          <label>Fecha</label>
+          <input type="date" value={dateStr} onChange={e => setDateStr(e.target.value)} />
+          <label>Hora</label>
+          <input type="time" value={time} onChange={e => setTime(e.target.value)} />
+          <label>Clase</label>
+          <input type="text" value={className} onChange={e => setClassName(e.target.value)} />
+          {otherAttendees > 0 && <p className="muted" style={{ marginTop: 6 }}>Ya hay {otherAttendees} apuntada{otherAttendees === 1 ? '' : 's'} en esa clase/hora.</p>}
+          <div className="row" style={{ marginTop: 8 }}>
+            <button className="btn btn-sage btn-sm" onClick={saveMove}>Guardar</button>
+            <button className="linklike" onClick={() => setEditing(false)}>Cancelar</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="muted">{fmtDate(new Date(b.date))} · {b.time} · {b.paymentMethod === 'bono' ? 'Con bono' : (PAYMENT_LABELS[b.paymentMethod] || b.paymentMethod)}</p>
+          <div className="row" style={{ marginTop: 8 }}>
+            {b.status === 'pendiente_pago' && <button className="btn btn-sage btn-sm" onClick={markPaid}>Marcar pagada</button>}
+            {b.status !== 'cancelada' && <button className="linklike" onClick={() => setEditing(true)}>Mover a otra fecha/hora</button>}
+            {b.status !== 'cancelada' && <button className="linklike" style={{ color: 'var(--danger)' }} onClick={cancelBooking}>Cancelar</button>}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1343,9 +1385,10 @@ function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, 
   const full = attendees.length >= (c.capacity || settings.defaultCapacity);
 
   const q = search.trim().toLowerCase();
-  const matches = q.length < 2 ? [] : students.filter(s =>
-    (s.name || '').toLowerCase().includes(q) || (s.phone || '').toLowerCase().includes(q)
-  ).filter(s => !attendees.some(b => b.studentId === s.id)).slice(0, 6);
+  const matches = [...students]
+    .filter(s => !attendees.some(b => b.studentId === s.id))
+    .filter(s => !q || (s.name || '').toLowerCase().includes(q) || (s.phone || '').toLowerCase().includes(q))
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   function addStudent(s) {
     const booking = {
@@ -1395,14 +1438,16 @@ function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, 
             <option value="efectivo">Efectivo</option>
             <option value="transferencia">Transferencia</option>
           </select>
-          <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar alumna por nombre o teléfono…" autoFocus />
-          {q.length >= 2 && matches.length === 0 && <p className="muted" style={{ marginTop: 6 }}>Sin resultados.</p>}
-          {matches.map(s => (
-            <div key={s.id} className="optionbox" style={{ marginTop: 8 }} onClick={() => addStudent(s)}>
-              <div className="t">{s.name}</div>
-              <div className="s">{s.phone}</div>
-            </div>
-          ))}
+          <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar por nombre o teléfono (o desplázate para ver todas)…" autoFocus />
+          {matches.length === 0 && <p className="muted" style={{ marginTop: 6 }}>Sin resultados.</p>}
+          <div style={{ maxHeight: 260, overflowY: 'auto', marginTop: 4 }}>
+            {matches.map(s => (
+              <div key={s.id} className="optionbox" style={{ marginTop: 8 }} onClick={() => addStudent(s)}>
+                <div className="t">{s.name}</div>
+                <div className="s">{s.phone}</div>
+              </div>
+            ))}
+          </div>
           <button className="linklike" style={{ marginTop: 8 }} onClick={() => { setAdding(false); setSearch(''); }}>Cancelar</button>
         </div>
       ) : (

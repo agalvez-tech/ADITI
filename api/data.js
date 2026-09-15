@@ -74,7 +74,22 @@ function classCapacityFor(schedule, item) {
 function isBookingChangeAllowed(diff, current, schedule) {
   if (!diff) return false;
   if (diff.type === 'noop') return true;
-  if (diff.type !== 'append') return false; // sin token, no se permite modificar reservas existentes
+
+  if (diff.type === 'modify') {
+    // Sin token, una alumna solo puede cancelar SU PROPIA reserva: el único
+    // campo que puede cambiar es 'status', y solo hacia 'cancelada'. Nunca
+    // puede reactivarla, cambiar la fecha/hora, ni tocar la de otra persona.
+    const { before, after } = diff;
+    if (after.status !== 'cancelada' || before.status === 'cancelada') return false;
+    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+    for (const k of keys) {
+      if (k === 'status') continue;
+      if (!sameJson(before[k], after[k])) return false;
+    }
+    return true;
+  }
+
+  if (diff.type !== 'append') return false; // ninguna otra modificación permitida sin token
   const item = diff.item || {};
   // Solo altas nuevas: pendiente de pago (bizum/tarjeta) o confirmada por bono propio.
   const validNew = item.status === 'pendiente_pago' || (item.status === 'confirmada' && item.paymentMethod === 'bono');
