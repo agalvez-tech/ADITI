@@ -89,6 +89,12 @@ function hasActiveBonoAt(purchases, studentId, onDate) {
   return purchases.some(p => p.studentId === studentId && p.status === 'confirmado' && new Date(p.expiryDate) >= onDate && (p.classesTotal === null || p.classesUsed < p.classesTotal));
 }
 function capitalizeFirst(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+// Una reserva 'en_espera' (lista de espera) no ocupa plaza real de la clase.
+function occupiesSpot(status) { return status !== 'cancelada' && status !== 'en_espera'; }
+function toMinutes(t) { const [h, m] = (t || '0:0').split(':').map(Number); return h * 60 + (m || 0); }
+function slotDuration(c) { return c.duration || 60; }
+const STATUS_LABELS = { confirmada: 'Confirmada', pendiente_pago: 'Pendiente de pago', cancelada: 'Cancelada', en_espera: 'En lista de espera' };
+const RECURRING_WEEKS = 10; // nº de semanas que se crean de golpe al añadir una alumna "fija"
 
 export default function App() {
   const [loading, setLoading] = useState(true);
@@ -339,7 +345,7 @@ function HorarioTab({ bookings, schedule, onPickClass }) {
             {classes.length === 0 ? (
               <div className="muted" style={{ padding: '4px 0 8px' }}>Sin clases este día.</div>
             ) : classes.map((c, idx) => {
-              const attendees = bookings.filter(b => b.date === dateIso && b.time === c.time && b.className === c.name && b.status !== 'cancelada').length;
+              const attendees = bookings.filter(b => b.date === dateIso && b.time === c.time && b.className === c.name && occupiesSpot(b.status)).length;
               const full = attendees >= (c.capacity || settings.defaultCapacity);
               return (
                 <div className="classcard" key={idx} onClick={() => onPickClass(c, dateIso, dayName)}>
@@ -574,8 +580,6 @@ function MyUpcomingBookings({ me, bookings, saveBookings, toast }) {
 
   if (upcoming.length === 0) return null;
 
-  const statusLabel = { confirmada: 'Confirmada', pendiente_pago: 'Pendiente de pago' };
-
   function cancelBooking(b) {
     if (!confirm(`¿Cancelar tu reserva de ${b.className} el ${fmtDate(new Date(b.date))}?`)) return;
     saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'cancelada' } : x));
@@ -592,7 +596,7 @@ function MyUpcomingBookings({ me, bookings, saveBookings, toast }) {
               <h3>{b.className}</h3>
               <p className="muted">{fmtDate(new Date(b.date))} · {b.time}</p>
             </div>
-            <span className={`pill ${b.status === 'confirmada' ? 'pill-sage' : 'pill-gray'}`}>{statusLabel[b.status] || b.status}</span>
+            <span className={`pill ${b.status === 'confirmada' ? 'pill-sage' : b.status === 'en_espera' ? 'pill-peach' : 'pill-gray'}`}>{STATUS_LABELS[b.status] || b.status}</span>
           </div>
           <button className="linklike" style={{ color: 'var(--danger)', marginTop: 8 }} onClick={() => cancelBooking(b)}>Cancelar reserva</button>
         </div>
@@ -872,14 +876,14 @@ function AdminReservaEditRow({ b, bookings, saveBookings, toast }) {
     toast('Reserva movida');
   }
 
-  const statusPill = b.status === 'confirmada' ? 'pill-sage' : b.status === 'pendiente_pago' ? 'pill-lav' : 'pill-gray';
-  const otherAttendees = bookings.filter(x => x.id !== b.id && x.date === dateStr && x.time === time && x.className === className && x.status !== 'cancelada').length;
+  const statusPill = b.status === 'confirmada' ? 'pill-sage' : b.status === 'pendiente_pago' ? 'pill-lav' : b.status === 'en_espera' ? 'pill-peach' : 'pill-gray';
+  const otherAttendees = bookings.filter(x => x.id !== b.id && x.date === dateStr && x.time === time && x.className === className && occupiesSpot(x.status)).length;
 
   return (
     <div className="card" style={{ marginTop: 8 }}>
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
         <h3 style={{ margin: 0 }}>{b.className}</h3>
-        <span className={`pill ${statusPill}`}>{b.status}</span>
+        <span className={`pill ${statusPill}`}>{STATUS_LABELS[b.status] || b.status}</span>
       </div>
       {editing ? (
         <>
@@ -1169,16 +1173,18 @@ function AdminHorarioDay({ day, classes, onChange }) {
   const [time, setTime] = useState('');
   const [name, setName] = useState('');
   const [capacity, setCapacity] = useState('');
+  const [duration, setDuration] = useState('');
 
-  function startAdd() { setEditing('new'); setTime(''); setName(''); setCapacity(''); }
-  function startEdit(i) { setEditing(i); setTime(classes[i].time); setName(classes[i].name); setCapacity(classes[i].capacity ? String(classes[i].capacity) : ''); }
+  function startAdd() { setEditing('new'); setTime(''); setName(''); setCapacity(''); setDuration(''); }
+  function startEdit(i) { setEditing(i); setTime(classes[i].time); setName(classes[i].name); setCapacity(classes[i].capacity ? String(classes[i].capacity) : ''); setDuration(classes[i].duration ? String(classes[i].duration) : ''); }
   function cancel() { setEditing(null); }
   function save() {
     if (!time.trim() || !name.trim()) return;
     const cap = capacity.trim() === '' ? settings.defaultCapacity : (Number(capacity) || settings.defaultCapacity);
+    const dur = duration.trim() === '' ? 60 : (Number(duration) || 60);
     let next;
-    if (editing === 'new') next = [...classes, { time: time.trim(), name: name.trim(), capacity: cap }];
-    else next = classes.map((c, i) => i === editing ? { time: time.trim(), name: name.trim(), capacity: cap } : c);
+    if (editing === 'new') next = [...classes, { time: time.trim(), name: name.trim(), capacity: cap, duration: dur }];
+    else next = classes.map((c, i) => i === editing ? { time: time.trim(), name: name.trim(), capacity: cap, duration: dur } : c);
     next = [...next].sort((a, b) => a.time.localeCompare(b.time));
     onChange(next);
     setEditing(null);
@@ -1197,12 +1203,13 @@ function AdminHorarioDay({ day, classes, onChange }) {
           <input type="time" value={time} onChange={e => setTime(e.target.value)} style={{ width: 110, flex: 'none' }} />
           <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Nombre de la clase" style={{ width: 'auto', flex: 1 }} />
           <input type="number" min="1" value={capacity} onChange={e => setCapacity(e.target.value)} placeholder={`Aforo (${settings.defaultCapacity})`} style={{ width: 90, flex: 'none' }} />
+          <input type="number" min="5" step="5" value={duration} onChange={e => setDuration(e.target.value)} placeholder="Min. (60)" style={{ width: 90, flex: 'none' }} />
           <button className="btn btn-sage btn-sm" onClick={save}>Guardar</button>
           <button className="linklike" onClick={cancel}>Cancelar</button>
         </div>
       ) : (
         <div key={i} className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
-          <span>{c.time} · {c.name} · aforo {c.capacity || settings.defaultCapacity}</span>
+          <span>{c.time} · {c.name} · aforo {c.capacity || settings.defaultCapacity} · {slotDuration(c)} min</span>
           <div className="row">
             <button className="linklike" onClick={() => startEdit(i)}>Editar</button>
             <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => remove(i)}>Eliminar</button>
@@ -1214,6 +1221,7 @@ function AdminHorarioDay({ day, classes, onChange }) {
           <input type="time" value={time} onChange={e => setTime(e.target.value)} style={{ width: 110, flex: 'none' }} />
           <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Nombre de la clase" style={{ width: 'auto', flex: 1 }} />
           <input type="number" min="1" value={capacity} onChange={e => setCapacity(e.target.value)} placeholder={`Aforo (${settings.defaultCapacity})`} style={{ width: 90, flex: 'none' }} />
+          <input type="number" min="5" step="5" value={duration} onChange={e => setDuration(e.target.value)} placeholder="Min. (60)" style={{ width: 90, flex: 'none' }} />
           <button className="btn btn-sage btn-sm" onClick={save}>Añadir</button>
           <button className="linklike" onClick={cancel}>Cancelar</button>
         </div>
@@ -1312,6 +1320,7 @@ function AdminResumen({ students, bookings, saveBookings, schedule, toast }) {
   const [extraTime, setExtraTime] = useState('');
   const [extraName, setExtraName] = useState('');
   const [manualExtras, setManualExtras] = useState([]); // clases puntuales creadas en esta sesión, antes de tener ninguna alumna apuntada
+  const [selectedKey, setSelectedKey] = useState(null);
 
   const date = addDays(new Date(), offset);
   const dateIso = isoDate(date);
@@ -1333,11 +1342,27 @@ function AdminResumen({ students, bookings, saveBookings, schedule, toast }) {
 
   function createExtra() {
     if (!extraTime.trim() || !extraName.trim()) { toast('Pon hora y nombre de la clase'); return; }
-    setManualExtras([...manualExtras, { time: extraTime.trim(), name: extraName.trim() }]);
+    const c = { time: extraTime.trim(), name: extraName.trim() };
+    setManualExtras([...manualExtras, c]);
     setCreatingExtra(false);
     setExtraTime('');
     setExtraName('');
+    setSelectedKey(`${c.time}|${c.name}`);
   }
+
+  const PX_PER_MIN = 1;
+  const MIN_BLOCK_H = 40;
+  let rangeStart = 8 * 60, rangeEnd = 20 * 60;
+  if (allClasses.length) {
+    const starts = allClasses.map(c => toMinutes(c.time));
+    const ends = allClasses.map(c => toMinutes(c.time) + slotDuration(c));
+    rangeStart = Math.max(0, Math.floor(Math.min(...starts) / 60) * 60 - 60);
+    rangeEnd = Math.min(24 * 60, Math.ceil(Math.max(...ends) / 60) * 60 + 60);
+  }
+  const hours = [];
+  for (let m = rangeStart; m <= rangeEnd; m += 60) hours.push(m);
+  const totalHeight = (rangeEnd - rangeStart) * PX_PER_MIN;
+  const selectedCls = allClasses.find(c => `${c.time}|${c.name}` === selectedKey) || null;
 
   return (
     <>
@@ -1351,10 +1376,45 @@ function AdminResumen({ students, bookings, saveBookings, schedule, toast }) {
       </div>
       {allClasses.length === 0 ? (
         <div className="empty">No hay clases programadas este día.</div>
-      ) : allClasses.map((c, idx) => (
-        <AdminResumenClass key={idx} cls={c} dateIso={dateIso} students={students} bookings={bookings}
+      ) : (
+        <div className="timeline-wrap">
+          <div className="timeline-scroll">
+            <div style={{ position: 'relative', height: totalHeight }}>
+              {hours.map(m => (
+                <div key={m} className="timeline-hourline" style={{ top: (m - rangeStart) * PX_PER_MIN }}>
+                  <span className="timeline-hourlabel">{String(Math.floor(m / 60)).padStart(2, '0')}:00</span>
+                </div>
+              ))}
+              {allClasses.map((c, idx) => {
+                const key = `${c.time}|${c.name}`;
+                const attendees = bookings.filter(b => b.date === dateIso && b.time === c.time && b.className === c.name && occupiesSpot(b.status)).length;
+                const waiting = bookings.filter(b => b.date === dateIso && b.time === c.time && b.className === c.name && b.status === 'en_espera').length;
+                const cap = c.capacity || settings.defaultCapacity;
+                const full = attendees >= cap;
+                const top = (toMinutes(c.time) - rangeStart) * PX_PER_MIN;
+                const height = Math.max(slotDuration(c) * PX_PER_MIN, MIN_BLOCK_H);
+                const styleClass = CLASS_STYLE[c.name] || 'pill-gray';
+                return (
+                  <div key={idx}
+                    className={`timeline-block ${styleClass} ${key === selectedKey ? 'selected' : ''} ${full ? 'full' : ''}`}
+                    style={{ top, height }}
+                    onClick={() => setSelectedKey(key === selectedKey ? null : key)}>
+                    <div className="tb-time">{c.time}</div>
+                    <div className="tb-name">{c.name}</div>
+                    <div className="tb-meta">{attendees}/{cap}{waiting > 0 ? ` · +${waiting} en espera` : ''}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+      {selectedCls ? (
+        <AdminResumenClass cls={selectedCls} dateIso={dateIso} students={students} bookings={bookings}
           saveBookings={saveBookings} toast={toast} />
-      ))}
+      ) : allClasses.length > 0 && (
+        <p className="muted" style={{ textAlign: 'center', margin: '4px 0 14px' }}>Toca una clase del horario para ver el detalle y añadir alumnas.</p>
+      )}
       <div className="card">
         {creatingExtra ? (
           <>
@@ -1379,27 +1439,82 @@ function AdminResumen({ students, bookings, saveBookings, schedule, toast }) {
 function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, toast }) {
   const settings = useContext(SettingsContext);
   const [adding, setAdding] = useState(false);
+  const [addMode, setAddMode] = useState('puntual'); // 'puntual' | 'fija'
   const [search, setSearch] = useState('');
   const [payMethod, setPayMethod] = useState('efectivo');
-  const attendees = bookings.filter(b => b.date === dateIso && b.time === c.time && b.className === c.name && b.status !== 'cancelada');
-  const full = attendees.length >= (c.capacity || settings.defaultCapacity);
+
+  const allForClass = bookings.filter(b => b.date === dateIso && b.time === c.time && b.className === c.name);
+  const attendees = allForClass.filter(b => occupiesSpot(b.status));
+  const waiting = allForClass.filter(b => b.status === 'en_espera');
+  const cap = c.capacity || settings.defaultCapacity;
+  const full = attendees.length >= cap;
 
   const q = search.trim().toLowerCase();
+  const alreadyIn = new Set([...attendees, ...waiting].map(b => b.studentId));
   const matches = [...students]
-    .filter(s => !attendees.some(b => b.studentId === s.id))
+    .filter(s => !alreadyIn.has(s.id))
     .filter(s => !q || (s.name || '').toLowerCase().includes(q) || (s.phone || '').toLowerCase().includes(q))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  function addStudent(s) {
-    const booking = {
-      id: uid(), studentId: s.id, day: dayNameForDate(new Date(dateIso)), time: c.time, className: c.name,
-      date: dateIso, status: 'confirmada', paymentMethod: payMethod, price: settings.claseSueltaPrice,
+  function buildBooking(s, dateStr) {
+    return {
+      id: uid(), studentId: s.id, day: dayNameForDate(new Date(`${dateStr}T12:00:00`)), time: c.time, className: c.name,
+      date: dateStr, status: 'confirmada', paymentMethod: payMethod, price: settings.claseSueltaPrice,
       createdAt: new Date().toISOString()
+    };
+  }
+
+  function addStudent(s) {
+    if (addMode === 'fija') {
+      const recurrenceId = uid();
+      const newBookings = [];
+      let skipped = 0;
+      for (let w = 0; w < RECURRING_WEEKS; w++) {
+        const dStr = isoDate(addDays(new Date(`${dateIso}T12:00:00`), w * 7));
+        const occupiedThatDay = bookings.filter(b => b.date === dStr && b.time === c.time && b.className === c.name && occupiesSpot(b.status)).length
+          + newBookings.filter(b => b.date === dStr).length;
+        if (occupiedThatDay >= cap) { skipped++; continue; }
+        newBookings.push({ ...buildBooking(s, dStr), recurrenceId });
+      }
+      if (newBookings.length === 0) { toast('No se pudo crear ninguna clase: aforo completo en todas las semanas'); return; }
+      saveBookings([...bookings, ...newBookings]);
+      setAdding(false);
+      setSearch('');
+      toast(`${s.name} añadida como fija: ${newBookings.length} clase${newBookings.length === 1 ? '' : 's'} creada${newBookings.length === 1 ? '' : 's'}${skipped ? `, ${skipped} semana${skipped === 1 ? '' : 's'} saltada${skipped === 1 ? '' : 's'} por aforo` : ''}`);
+    } else {
+      saveBookings([...bookings, buildBooking(s, dateIso)]);
+      setAdding(false);
+      setSearch('');
+      toast(`${s.name} añadida a ${c.name} (${payMethod})`);
+    }
+  }
+
+  function addToWaitlist(s) {
+    const booking = {
+      id: uid(), studentId: s.id, day: dayNameForDate(new Date(`${dateIso}T12:00:00`)), time: c.time, className: c.name,
+      date: dateIso, status: 'en_espera', createdAt: new Date().toISOString()
     };
     saveBookings([...bookings, booking]);
     setAdding(false);
     setSearch('');
-    toast(`${s.name} añadida a ${c.name} (${payMethod})`);
+    toast(`${s.name} añadida a la lista de espera`);
+  }
+
+  function cancelOne(b) {
+    saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'cancelada' } : x));
+    toast('Reserva cancelada');
+  }
+
+  function cancelSeries(b) {
+    if (!confirm('¿Cancelar esta clase y todas las siguientes de esta serie fija?')) return;
+    saveBookings(bookings.map(x => (x.recurrenceId === b.recurrenceId && x.date >= b.date) ? { ...x, status: 'cancelada' } : x));
+    toast('Serie cancelada desde esta fecha');
+  }
+
+  function confirmWaiting(b) {
+    if (attendees.length >= cap) { toast('La clase sigue completa'); return; }
+    saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'confirmada', paymentMethod: x.paymentMethod || 'efectivo', price: x.price || settings.claseSueltaPrice } : x));
+    toast('Movida de lista de espera a confirmada');
   }
 
   return (
@@ -1409,40 +1524,63 @@ function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, 
           <div className="time">{c.time}</div>
           <div className="name">{c.name}</div>
         </div>
-        <span className="pill pill-lav">{attendees.length} apuntada{attendees.length === 1 ? '' : 's'}</span>
+        <span className="pill pill-lav">{attendees.length}/{cap}</span>
       </div>
       {attendees.length > 0 && (
         <ul style={{ margin: '10px 0 0', paddingLeft: 18 }}>
           {attendees.map(b => {
             const s = students.find(x => x.id === b.studentId);
             return (
-              <li key={b.id} className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, listStyle: 'none', marginLeft: -18, marginBottom: 4 }}>
+              <li key={b.id} className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', listStyle: 'none', marginLeft: -18, marginBottom: 4 }}>
                 <span>{s ? s.name : 'Alumna eliminada'}</span>
                 {b.status === 'pendiente_pago' && <span className="pill pill-gray">Pago pendiente</span>}
                 {b.paymentMethod === 'efectivo' && <span className="pill pill-sage">Efectivo</span>}
                 {b.paymentMethod === 'transferencia' && <span className="pill pill-sage">Transferencia</span>}
-                <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => {
-                  saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'cancelada' } : x));
-                  toast('Reserva cancelada');
-                }}>Cancelar</button>
+                {b.recurrenceId && <span className="pill pill-lav">Fija</span>}
+                <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => cancelOne(b)}>Cancelar</button>
+                {b.recurrenceId && <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => cancelSeries(b)}>Cancelar serie</button>}
               </li>
             );
           })}
         </ul>
       )}
-      {full ? (
-        <p className="muted" style={{ marginTop: 10 }}>Clase completa, no se puede añadir a nadie más.</p>
-      ) : adding ? (
+      {waiting.length > 0 && (
+        <>
+          <div className="muted" style={{ marginTop: 12, fontWeight: 600 }}>Lista de espera ({waiting.length})</div>
+          <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+            {waiting.map(b => {
+              const s = students.find(x => x.id === b.studentId);
+              return (
+                <li key={b.id} className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', listStyle: 'none', marginLeft: -18, marginBottom: 4 }}>
+                  <span>{s ? s.name : 'Alumna eliminada'}</span>
+                  <button className="linklike" onClick={() => confirmWaiting(b)}>Confirmar</button>
+                  <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => cancelOne(b)}>Quitar</button>
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      )}
+      {adding ? (
         <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
-          <select value={payMethod} onChange={e => setPayMethod(e.target.value)} style={{ marginBottom: 8 }}>
-            <option value="efectivo">Efectivo</option>
-            <option value="transferencia">Transferencia</option>
-          </select>
+          {!full && (
+            <div className="row" style={{ marginBottom: 8 }}>
+              <button type="button" className={`chip ${addMode === 'puntual' ? 'active' : ''}`} onClick={() => setAddMode('puntual')}>Puntual</button>
+              <button type="button" className={`chip ${addMode === 'fija' ? 'active' : ''}`} onClick={() => setAddMode('fija')}>Fija (cada semana)</button>
+            </div>
+          )}
+          {!full && (
+            <select value={payMethod} onChange={e => setPayMethod(e.target.value)} style={{ marginBottom: 8 }}>
+              <option value="efectivo">Efectivo</option>
+              <option value="transferencia">Transferencia</option>
+            </select>
+          )}
+          {full && <p className="muted" style={{ marginBottom: 8 }}>Clase completa: se añadirá a la lista de espera.</p>}
           <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar por nombre o teléfono (o desplázate para ver todas)…" autoFocus />
           {matches.length === 0 && <p className="muted" style={{ marginTop: 6 }}>Sin resultados.</p>}
           <div style={{ maxHeight: 260, overflowY: 'auto', marginTop: 4 }}>
             {matches.map(s => (
-              <div key={s.id} className="optionbox" style={{ marginTop: 8 }} onClick={() => addStudent(s)}>
+              <div key={s.id} className="optionbox" style={{ marginTop: 8 }} onClick={() => full ? addToWaitlist(s) : addStudent(s)}>
                 <div className="t">{s.name}</div>
                 <div className="s">{s.phone}</div>
               </div>
@@ -1451,7 +1589,9 @@ function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, 
           <button className="linklike" style={{ marginTop: 8 }} onClick={() => { setAdding(false); setSearch(''); }}>Cancelar</button>
         </div>
       ) : (
-        <button className="linklike" style={{ marginTop: 10 }} onClick={() => setAdding(true)}>+ Añadir alumna (efectivo)</button>
+        <button className="linklike" style={{ marginTop: 10 }} onClick={() => setAdding(true)}>
+          {full ? '+ Añadir a lista de espera' : '+ Añadir alumna'}
+        </button>
       )}
     </div>
   );
@@ -1565,10 +1705,10 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
   let step2 = null;
   if (dateIso) {
     const capacity = cls.capacity || settings.defaultCapacity;
-    const attendeeCount = bookings.filter(b => b.date === dateIso && b.time === cls.time && b.className === cls.name && b.status !== 'cancelada').length;
+    const attendeeCount = bookings.filter(b => b.date === dateIso && b.time === cls.time && b.className === cls.name && occupiesSpot(b.status)).length;
     const full = attendeeCount >= capacity;
     if (me) {
-      const already = bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === cls.time && b.className === cls.name && b.status !== 'cancelada');
+      const already = bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === cls.time && b.className === cls.name && occupiesSpot(b.status));
       if (already) {
         step2 = <p className="muted" style={{ marginTop: 12 }}>Ya tienes esta clase reservada ese día.</p>;
       } else if (full) {

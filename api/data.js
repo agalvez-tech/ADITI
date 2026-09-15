@@ -95,8 +95,9 @@ function isBookingChangeAllowed(diff, current, schedule) {
   const validNew = item.status === 'pendiente_pago' || (item.status === 'confirmada' && item.paymentMethod === 'bono');
   if (!validNew) return false;
 
+  // 'en_espera' (lista de espera, la crea solo Beatriz) no ocupa plaza real.
   const occupied = (Array.isArray(current) ? current : [])
-    .filter(b => b.date === item.date && b.time === item.time && b.className === item.className && b.status !== 'cancelada')
+    .filter(b => b.date === item.date && b.time === item.time && b.className === item.className && b.status !== 'cancelada' && b.status !== 'en_espera')
     .length;
   return occupied < classCapacityFor(schedule, item);
 }
