@@ -1377,6 +1377,8 @@ function AdminResumen({ students, bookings, saveBookings, schedule, toast }) {
       {allClasses.length === 0 ? (
         <div className="empty">No hay clases programadas este día.</div>
       ) : (
+        <>
+        <p className="muted" style={{ textAlign: 'center', margin: '0 0 8px' }}>Toca una clase para ver el detalle y añadir alumnas.</p>
         <div className="timeline-wrap">
           <div className="timeline-scroll">
             <div style={{ position: 'relative', height: totalHeight }}>
@@ -1408,12 +1410,16 @@ function AdminResumen({ students, bookings, saveBookings, schedule, toast }) {
             </div>
           </div>
         </div>
+        </>
       )}
-      {selectedCls ? (
-        <AdminResumenClass cls={selectedCls} dateIso={dateIso} students={students} bookings={bookings}
-          saveBookings={saveBookings} toast={toast} />
-      ) : allClasses.length > 0 && (
-        <p className="muted" style={{ textAlign: 'center', margin: '4px 0 14px' }}>Toca una clase del horario para ver el detalle y añadir alumnas.</p>
+      {selectedCls && (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setSelectedKey(null)}>
+          <div className="modal-sheet">
+            <button className="modal-close" onClick={() => setSelectedKey(null)}>×</button>
+            <AdminResumenClass cls={selectedCls} dateIso={dateIso} students={students} bookings={bookings}
+              saveBookings={saveBookings} toast={toast} />
+          </div>
+        </div>
       )}
       <div className="card">
         {creatingExtra ? (
@@ -1518,7 +1524,7 @@ function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, 
   }
 
   return (
-    <div className="card">
+    <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 13, justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
           <div className="time">{c.time}</div>
