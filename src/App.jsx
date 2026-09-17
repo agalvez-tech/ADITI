@@ -139,6 +139,7 @@ export default function App() {
   const [bookings, setBookings] = useState([]);
   const [purchases, setPurchases] = useState([]);
   const [wallPosts, setWallPosts] = useState([]);
+  const [polls, setPolls] = useState([]);
   const [schedule, setSchedule] = useState(DEFAULT_SCHEDULE);
   const [bonos, setBonos] = useState(DEFAULT_BONOS);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -160,14 +161,15 @@ export default function App() {
     function loadAll() {
       return Promise.all([
         isAdmin ? getData('students', adminToken) : Promise.resolve(null),
-        getData('bookings'), getData('purchases'), getData('wallPosts'),
+        getData('bookings'), getData('purchases'), getData('wallPosts'), getData('polls'),
         getData('schedule'), getData('bonos'), getData('settings')
-      ]).then(([s, b, p, w, sch, bo, cfg]) => {
+      ]).then(([s, b, p, w, pl, sch, bo, cfg]) => {
         if (cancelled) return;
         if (isAdmin) setStudents(s || []);
         setBookings(b || []);
         setPurchases(p || []);
         setWallPosts(w || []);
+        setPolls(pl || []);
         if (sch) setSchedule(sch);
         if (bo) setBonos(bo);
         if (cfg) setSettings({ ...DEFAULT_SETTINGS, ...cfg });
@@ -200,6 +202,7 @@ export default function App() {
   function saveBookings(next) { setBookings(next); setData('bookings', next, adminToken); }
   function savePurchases(next) { setPurchases(next); setData('purchases', next, adminToken); }
   function saveWallPosts(next) { setWallPosts(next); setData('wallPosts', next, adminToken); }
+  function savePolls(next) { setPolls(next); setData('polls', next, adminToken); }
   function saveSchedule(next) { setSchedule(next); setData('schedule', next, adminToken); }
   function saveBonos(next) { setBonos(next); setData('bonos', next, adminToken); }
   function saveSettings(next) { setSettings(next); setData('settings', next, adminToken); }
@@ -236,7 +239,7 @@ export default function App() {
         {loading ? (
           <div className="empty">Cargando…</div>
         ) : tab === 'muro' ? (
-          <MuroTab wallPosts={wallPosts} />
+          <MuroTab wallPosts={wallPosts} polls={polls} savePolls={savePolls} me={me} toast={toast} />
         ) : tab === 'horario' ? (
           <HorarioTab
             bookings={bookings} schedule={schedule}
@@ -255,6 +258,7 @@ export default function App() {
         ) : tab === 'admin' ? (
           <AdminTab adminTab={adminTab} setAdminTab={setAdminTab}
             students={students} saveStudents={saveStudents} bookings={bookings} purchases={purchases} wallPosts={wallPosts}
+            polls={polls} savePolls={savePolls}
             activePurchaseFor={activePurchaseFor} adminToken={adminToken}
             schedule={schedule} saveSchedule={saveSchedule} bonos={bonos} saveBonos={saveBonos}
             settings={settings} saveSettings={saveSettings} onAdminLogout={logoutAdmin}
@@ -333,19 +337,57 @@ function BottomNav({ tab, setTab, isAdmin }) {
 }
 
 /* ---------------- MURO ---------------- */
-function MuroTab({ wallPosts }) {
+function MuroTab({ wallPosts, polls, savePolls, me, toast }) {
   const posts = [...wallPosts].sort((a, b) => new Date(b.date) - new Date(a.date));
-  if (posts.length === 0) {
-    return <div className="empty"><div className="glyph">🌿</div>Todavía no hay novedades.<br />Aquí verás los avisos y eventos de Beatriz.</div>;
+  const activePoll = me && (polls || []).find(p => p.active !== false && !(p.votes || []).some(v => v.studentId === me.id));
+
+  return (
+    <>
+      {activePoll && <PollCard poll={activePoll} me={me} polls={polls} savePolls={savePolls} toast={toast} />}
+      {posts.length === 0 ? (
+        <div className="empty"><div className="glyph">🌿</div>Todavía no hay novedades.<br />Aquí verás los avisos y eventos de Beatriz.</div>
+      ) : posts.map(p => (
+        <div className="card postcard" key={p.id}>
+          <div className="postdate">{fmtDate(new Date(p.date))}</div>
+          <h3>{p.title}</h3>
+          {p.imageUrl && <img src={p.imageUrl} alt="" className="postimg" />}
+          <p>{p.content}</p>
+        </div>
+      ))}
+    </>
+  );
+}
+
+function PollCard({ poll, me, polls, savePolls, toast }) {
+  const [selected, setSelected] = useState(null);
+  const [voted, setVoted] = useState(false);
+
+  function vote() {
+    if (!selected) { toast('Elige una opción'); return; }
+    const next = polls.map(p => p.id === poll.id
+      ? { ...p, votes: [...(p.votes || []), { studentId: me.id, optionId: selected, votedAt: new Date().toISOString() }] }
+      : p);
+    savePolls(next);
+    setVoted(true);
+    toast('¡Voto registrado! Gracias por participar.');
   }
-  return posts.map(p => (
-    <div className="card postcard" key={p.id}>
-      <div className="postdate">{fmtDate(new Date(p.date))}</div>
-      <h3>{p.title}</h3>
-      {p.imageUrl && <img src={p.imageUrl} alt="" className="postimg" />}
-      <p>{p.content}</p>
+
+  if (voted) return null;
+
+  return (
+    <div className="card" style={{ borderColor: 'var(--plum)', borderWidth: 1.5 }}>
+      <div className="sectionlabel" style={{ marginTop: 0 }}>Encuesta de Beatriz</div>
+      <h3>{poll.question}</h3>
+      {(poll.options || []).map(o => (
+        <div key={o.id} className="optionbox"
+          style={selected === o.id ? { borderColor: 'var(--plum)', background: 'var(--lav-pale)' } : {}}
+          onClick={() => setSelected(o.id)}>
+          <div className="t">{o.label}</div>
+        </div>
+      ))}
+      <button className="btn btn-primary" style={{ marginTop: 8 }} onClick={vote}>Votar</button>
     </div>
-  ));
+  );
 }
 
 /* ---------------- HORARIO ---------------- */
@@ -1055,7 +1097,7 @@ function AdminEstadisticas({ students, purchases, bookings, bonos }) {
   );
 }
 
-function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, activePurchaseFor, adminToken, schedule, saveSchedule, bonos, saveBonos, settings, saveSettings, onAdminLogout, savePurchases, saveBookings, saveWallPosts, toast }) {
+function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, polls, savePolls, activePurchaseFor, adminToken, schedule, saveSchedule, bonos, saveBonos, settings, saveSettings, onAdminLogout, savePurchases, saveBookings, saveWallPosts, toast }) {
   const [alumnaSearch, setAlumnaSearch] = useState('');
   const tabs = [
     { id: 'estadisticas', label: 'Estadísticas' },
@@ -1066,6 +1108,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
     { id: 'horarios', label: 'Horarios' },
     { id: 'gestionbonos', label: 'Gestionar bonos' },
     { id: 'muro', label: 'Publicar en el muro' },
+    { id: 'encuestas', label: 'Encuestas' },
     { id: 'importar', label: 'Importar alumnas' },
     { id: 'ajustes', label: 'Ajustes' }
   ];
@@ -1203,6 +1246,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
       {adminTab === 'horarios' && <AdminHorarios schedule={schedule} saveSchedule={saveSchedule} toast={toast} />}
       {adminTab === 'gestionbonos' && <AdminBonos bonos={bonos} saveBonos={saveBonos} toast={toast} />}
       {adminTab === 'muro' && <AdminMuro wallPosts={wallPosts} saveWallPosts={saveWallPosts} adminToken={adminToken} toast={toast} />}
+      {adminTab === 'encuestas' && <AdminEncuestas polls={polls} savePolls={savePolls} students={students} toast={toast} />}
       {adminTab === 'importar' && <AdminImport students={students} saveStudents={saveStudents} toast={toast} />}
       {adminTab === 'ajustes' && <AdminAjustes settings={settings} saveSettings={saveSettings} adminToken={adminToken} onAdminLogout={onAdminLogout} toast={toast} />}
     </>
@@ -1731,6 +1775,116 @@ function AdminMuro({ wallPosts, saveWallPosts, adminToken, toast }) {
             }}>Eliminar</button>
         </div>
       ))}
+    </>
+  );
+}
+
+function AdminEncuestas({ polls, savePolls, students, toast }) {
+  const [creating, setCreating] = useState(false);
+  const [question, setQuestion] = useState('');
+  const [options, setOptions] = useState(['', '']);
+
+  function updateOption(i, value) {
+    setOptions(options.map((o, x) => x === i ? value : o));
+  }
+  function addOption() {
+    if (options.length >= 5) return;
+    setOptions([...options, '']);
+  }
+  function removeOption(i) {
+    if (options.length <= 2) return;
+    setOptions(options.filter((_, x) => x !== i));
+  }
+  function resetForm() {
+    setCreating(false);
+    setQuestion('');
+    setOptions(['', '']);
+  }
+  function publish() {
+    const cleanOptions = options.map(o => o.trim()).filter(Boolean);
+    if (!question.trim() || cleanOptions.length < 2) { toast('Escribe la pregunta y al menos 2 opciones'); return; }
+    const poll = {
+      id: uid(), question: question.trim(),
+      options: cleanOptions.map(label => ({ id: uid(), label })),
+      votes: [], active: true, createdAt: new Date().toISOString()
+    };
+    savePolls([...polls, poll]);
+    resetForm();
+    toast('Encuesta publicada, avisando a las alumnas…');
+    fetch('/api/notify-wall', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Nueva encuesta', body: poll.question })
+    }).catch(() => {});
+  }
+  function toggleActive(p) {
+    savePolls(polls.map(x => x.id === p.id ? { ...x, active: x.active === false } : x));
+  }
+  function removePoll(p) {
+    if (!confirm('¿Eliminar esta encuesta y sus votos?')) return;
+    savePolls(polls.filter(x => x.id !== p.id));
+    toast('Encuesta eliminada');
+  }
+
+  return (
+    <>
+      <div className="card">
+        {creating ? (
+          <>
+            <label>Pregunta</label>
+            <input type="text" value={question} onChange={e => setQuestion(e.target.value)} placeholder="Ej. ¿Qué horario preferís para Balance Yoga?" />
+            <label>Opciones</label>
+            {options.map((o, i) => (
+              <div className="row" key={i} style={{ alignItems: 'center', marginBottom: 6 }}>
+                <input type="text" value={o} onChange={e => updateOption(i, e.target.value)} placeholder={`Opción ${i + 1}`} style={{ width: 'auto', flex: 1 }} />
+                {options.length > 2 && <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => removeOption(i)}>Quitar</button>}
+              </div>
+            ))}
+            {options.length < 5 && <button className="linklike" onClick={addOption}>+ Añadir opción</button>}
+            <div className="row" style={{ marginTop: 12 }}>
+              <button className="btn btn-primary btn-sm" onClick={publish}>Publicar encuesta</button>
+              <button className="linklike" onClick={resetForm}>Cancelar</button>
+            </div>
+          </>
+        ) : (
+          <button className="btn btn-primary" onClick={() => setCreating(true)}>+ Nueva encuesta</button>
+        )}
+      </div>
+      <div className="sectionlabel">Encuestas</div>
+      {polls.length === 0 ? <div className="empty">Todavía no has creado ninguna encuesta.</div> :
+        [...polls].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).map(p => {
+          const votes = p.votes || [];
+          const total = votes.length;
+          const closed = p.active === false;
+          return (
+            <div className="card" key={p.id}>
+              <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <h3 style={{ margin: 0 }}>{p.question}</h3>
+                <span className={`pill ${closed ? 'pill-gray' : 'pill-sage'}`}>{closed ? 'Cerrada' : 'Activa'}</span>
+              </div>
+              <p className="muted" style={{ marginTop: 4 }}>{total} voto{total === 1 ? '' : 's'} de {students.length} alumnas</p>
+              {(p.options || []).map(o => {
+                const count = votes.filter(v => v.optionId === o.id).length;
+                const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+                return (
+                  <div key={o.id} style={{ marginTop: 8 }}>
+                    <div className="row" style={{ justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: 13.5 }}>{o.label}</span>
+                      <span className="muted">{count} · {pct}%</span>
+                    </div>
+                    <div style={{ background: 'var(--cream-2)', borderRadius: 6, height: 8, marginTop: 4, overflow: 'hidden' }}>
+                      <div style={{ width: `${pct}%`, background: 'var(--plum)', height: '100%', borderRadius: 6 }} />
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="row" style={{ marginTop: 10 }}>
+                <button className="linklike" onClick={() => toggleActive(p)}>{closed ? 'Reabrir' : 'Cerrar encuesta'}</button>
+                <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => removePoll(p)}>Eliminar</button>
+              </div>
+            </div>
+          );
+        })}
     </>
   );
 }

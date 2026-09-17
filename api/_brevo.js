@@ -114,3 +114,22 @@ export async function broadcastWallPost(students, title, content, imageUrl) {
     emails.map(email => sendEmail(email, `Aditi: ${title}`, html))
   );
 }
+
+// Manda la encuesta a cada alumna con un botón por opción para poder votar
+// con un solo clic desde el propio email, sin tener que abrir la app.
+// Cada enlace lleva su id de alumna incrustado para que el voto quede ligado
+// a ella igual que si votara desde dentro de la app.
+export async function broadcastPoll(students, poll, appBaseUrl) {
+  if (!enabled() || !poll) return;
+  const optionButtons = (poll.options || []).map(o => (studentId) =>
+    `<p style="margin:8px 0;"><a href="${appBaseUrl}/api/poll-vote?poll=${encodeURIComponent(poll.id)}&option=${encodeURIComponent(o.id)}&student=${encodeURIComponent(studentId)}" style="display:inline-block;padding:11px 18px;background:#3F2751;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;">${o.label}</a></p>`
+  );
+  await Promise.allSettled((students || []).filter(s => s.email).map(s => {
+    const html = `<p>Hola ${(s.name || '').split(' ')[0]},</p>
+      <p><b>${poll.question}</b></p>
+      ${optionButtons.map(fn => fn(s.id)).join('')}
+      <p style="font-size:12px;color:#888;">También puedes votar abriendo la app. Un solo voto por alumna.</p>
+      <p>— Aditi Functional Yoga</p>`;
+    return sendEmail(s.email, `Aditi: ${poll.question}`, html);
+  }));
+}

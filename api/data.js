@@ -1,11 +1,11 @@
 import { Redis } from '@upstash/redis';
-import { syncStudentContact, notifyBonoConfirmado, notifySueltaConfirmada, broadcastWallPost } from './_brevo.js';
+import { syncStudentContact, notifyBonoConfirmado, notifySueltaConfirmada, broadcastWallPost, broadcastPoll } from './_brevo.js';
 
 const redis = Redis.fromEnv();
 
 // Solo se permite leer/escribir estas claves compartidas.
 // Evita que alguien use el endpoint para escribir cualquier cosa en tu Redis.
-const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts', 'schedule', 'bonos', 'settings'];
+const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts', 'schedule', 'bonos', 'settings', 'polls'];
 
 // 'students' contiene datos personales de todas las alumnas: ni lectura ni
 // escritura completas sin ser admin (las alumnas usan api/student-profile.js
@@ -102,6 +102,33 @@ function isBookingChangeAllowed(diff, current, schedule) {
   return occupied < classCapacityFor(schedule, item);
 }
 
+function isPollChangeAllowed(diff) {
+  if (!diff) return false;
+  if (diff.type === 'noop') return true;
+  if (diff.type !== 'modify') return false; // crear/cerrar/borrar encuestas: solo Beatriz
+
+  // Sin token, una alumna solo puede añadir SU voto a una encuesta ya
+  // existente: ningún otro campo puede cambiar, no se pueden tocar votos
+  // ya registrados, y no puede haber votado ya esa misma encuesta.
+  const { before, after } = diff;
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  for (const k of keys) {
+    if (k === 'votes') continue;
+    if (!sameJson(before[k], after[k])) return false;
+  }
+  const beforeVotes = Array.isArray(before.votes) ? before.votes : [];
+  const afterVotes = Array.isArray(after.votes) ? after.votes : [];
+  if (afterVotes.length !== beforeVotes.length + 1) return false;
+  for (let i = 0; i < beforeVotes.length; i++) {
+    if (!sameJson(beforeVotes[i], afterVotes[i])) return false;
+  }
+  const newVote = afterVotes[afterVotes.length - 1];
+  if (!newVote?.studentId || !newVote?.optionId) return false;
+  if (beforeVotes.some(v => v.studentId === newVote.studentId)) return false; // ya había votado
+  if (before.active === false) return false; // encuesta cerrada
+  return (before.options || []).some(o => o.id === newVote.optionId);
+}
+
 function isPurchaseChangeAllowed(diff) {
   if (!diff) return false;
   if (diff.type === 'noop') return true;
@@ -126,7 +153,7 @@ function isPurchaseChangeAllowed(diff) {
 
 // Dispara las integraciones de Brevo según qué colección cambió. No hace
 // nada si BREVO_API_KEY no está configurada (ver api/_brevo.js).
-async function runBrevoSideEffects(key, value, diff) {
+async function runBrevoSideEffects(key, value, diff, appBaseUrl) {
   if (key === 'students') {
     const purchases = (await redis.get('purchases')) || [];
     await Promise.allSettled((value || []).map(s => syncStudentContact(s, purchases)));
@@ -171,6 +198,11 @@ async function runBrevoSideEffects(key, value, diff) {
     await broadcastWallPost(students, diff.item.title, diff.item.content, diff.item.imageUrl);
     return;
   }
+  if (key === 'polls' && diff?.type === 'append') {
+    const students = (await redis.get('students')) || [];
+    await broadcastPoll(students, diff.item, appBaseUrl);
+    return;
+  }
 }
 
 export default async function handler(req, res) {
@@ -200,17 +232,19 @@ export default async function handler(req, res) {
     }
     try {
       const { value } = req.body || {};
-      const needsDiff = key === 'bookings' || key === 'purchases' || key === 'wallPosts';
+      const needsDiff = key === 'bookings' || key === 'purchases' || key === 'wallPosts' || key === 'polls';
       const current = needsDiff ? await redis.get(key) : undefined;
       const diff = needsDiff ? diffSingleChange(current, value) : null;
 
-      if (!admin && (key === 'bookings' || key === 'purchases')) {
+      if (!admin && (key === 'bookings' || key === 'purchases' || key === 'polls')) {
         let allowed;
         if (key === 'bookings') {
           const schedule = await redis.get('schedule');
           allowed = isBookingChangeAllowed(diff, current, schedule);
-        } else {
+        } else if (key === 'purchases') {
           allowed = isPurchaseChangeAllowed(diff);
+        } else {
+          allowed = isPollChangeAllowed(diff);
         }
         if (!allowed) {
           return res.status(403).json({ error: 'Cambio no permitido' });
@@ -223,7 +257,8 @@ export default async function handler(req, res) {
       // Se esperan (Vercel puede cortar el proceso justo después de responder),
       // pero un fallo aquí no hace fallar la escritura ya confirmada.
       try {
-        await runBrevoSideEffects(key, value, diff);
+        const appBaseUrl = process.env.APP_BASE_URL || `https://${req.headers.host}`;
+        await runBrevoSideEffects(key, value, diff, appBaseUrl);
       } catch (e) {
         console.error('Brevo: error en efectos secundarios', e);
       }

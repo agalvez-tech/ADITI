@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tu voto</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{ --plum:#3F2751; --cream:#FAFAF9; --ink:#1D1D1F; --ink-soft:#6E6E73; --line:#E7E7E5; --sage:#4C7A52; }
+  *{box-sizing:border-box;}
+  body{font-family:'Inter',-apple-system,sans-serif;background:var(--cream);color:var(--ink);display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:24px;text-align:center;}
+  .box{max-width:400px;background:#fff;border:1px solid var(--line);border-radius:16px;padding:30px 24px;box-shadow:0 6px 16px rgba(0,0,0,.06);}
+  .glyph{font-size:34px;margin-bottom:10px;}
+  h1{font-size:19px;margin:0 0 10px;color:var(--plum);}
+  p{font-size:14.5px;color:var(--ink-soft);line-height:1.55;margin:0 0 6px;}
+  a.btn{display:inline-block;margin-top:18px;background:var(--plum);color:#fff;text-decoration:none;padding:12px 22px;border-radius:999px;font-weight:600;font-size:14px;}
+</style>
+</head>
+<body>
+  <div class="box" id="box">
+    <div class="glyph">🗳️</div>
+    <h1 id="title">Procesando tu voto…</h1>
+    <p id="msg"></p>
+    <a class="btn" href="/">Volver a la app</a>
+  </div>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const status = params.get('status');
+    const option = params.get('option');
+    const title = document.getElementById('title');
+    const msg = document.getElementById('msg');
+    const glyph = document.querySelector('.glyph');
+    const texts = {
+      ok: ['✅', '¡Voto registrado!', option ? `Has votado "${option}". Gracias por participar.` : 'Gracias por participar.'],
+      already: ['🙌', 'Tu voto ya estaba registrado', 'Ya habías votado en esta encuesta, ¡gracias!'],
+      closed: ['🔒', 'Esta encuesta ya está cerrada', 'Gracias de todas formas por tu interés.'],
+      notfound: ['🤔', 'Esta encuesta ya no existe', 'Puede que Beatriz la haya eliminado.'],
+      invalido: ['⚠️', 'Enlace no válido', 'Prueba a votar directamente desde la app.'],
+      error: ['⚠️', 'Algo ha ido mal', 'Inténtalo de nuevo en unos minutos, o vota desde la app.'],
+    };
+    const [g, t, m] = texts[status] || texts.error;
+    glyph.textContent = g;
+    title.textContent = t;
+    msg.textContent = m;
+  </script>
+</body>
+</html>
