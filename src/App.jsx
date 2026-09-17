@@ -382,6 +382,7 @@ function PollCard({ poll, me, polls, savePolls, toast }) {
         <div key={o.id} className="optionbox"
           style={selected === o.id ? { borderColor: 'var(--plum)', background: 'var(--lav-pale)' } : {}}
           onClick={() => setSelected(o.id)}>
+          {o.imageUrl && <img src={o.imageUrl} alt="" style={{ width: '100%', maxHeight: 180, objectFit: 'cover', borderRadius: 8, marginBottom: 8 }} />}
           <div className="t">{o.label}</div>
         </div>
       ))}
@@ -1246,7 +1247,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
       {adminTab === 'horarios' && <AdminHorarios schedule={schedule} saveSchedule={saveSchedule} toast={toast} />}
       {adminTab === 'gestionbonos' && <AdminBonos bonos={bonos} saveBonos={saveBonos} toast={toast} />}
       {adminTab === 'muro' && <AdminMuro wallPosts={wallPosts} saveWallPosts={saveWallPosts} adminToken={adminToken} toast={toast} />}
-      {adminTab === 'encuestas' && <AdminEncuestas polls={polls} savePolls={savePolls} students={students} toast={toast} />}
+      {adminTab === 'encuestas' && <AdminEncuestas polls={polls} savePolls={savePolls} students={students} adminToken={adminToken} toast={toast} />}
       {adminTab === 'importar' && <AdminImport students={students} saveStudents={saveStudents} toast={toast} />}
       {adminTab === 'ajustes' && <AdminAjustes settings={settings} saveSettings={saveSettings} adminToken={adminToken} onAdminLogout={onAdminLogout} toast={toast} />}
     </>
@@ -1779,33 +1780,49 @@ function AdminMuro({ wallPosts, saveWallPosts, adminToken, toast }) {
   );
 }
 
-function AdminEncuestas({ polls, savePolls, students, toast }) {
+function AdminEncuestas({ polls, savePolls, students, adminToken, toast }) {
   const [creating, setCreating] = useState(false);
   const [question, setQuestion] = useState('');
-  const [options, setOptions] = useState(['', '']);
+  const [options, setOptions] = useState([{ label: '', imageUrl: null }, { label: '', imageUrl: null }]);
 
-  function updateOption(i, value) {
-    setOptions(options.map((o, x) => x === i ? value : o));
+  function updateOptionLabel(i, value) {
+    setOptions(prev => prev.map((o, x) => x === i ? { ...o, label: value } : o));
   }
   function addOption() {
-    if (options.length >= 5) return;
-    setOptions([...options, '']);
+    setOptions(prev => prev.length >= 5 ? prev : [...prev, { label: '', imageUrl: null }]);
   }
   function removeOption(i) {
-    if (options.length <= 2) return;
-    setOptions(options.filter((_, x) => x !== i));
+    const opt = options[i];
+    if (opt?.imageUrl) deleteWallImage(opt.imageUrl, adminToken);
+    setOptions(prev => prev.length <= 2 ? prev : prev.filter((_, x) => x !== i));
+  }
+  async function handleOptionImage(i, file) {
+    if (!file) return;
+    setOptions(prev => prev.map((o, x) => x === i ? { ...o, uploading: true } : o));
+    try {
+      const url = await uploadWallImage(file);
+      setOptions(prev => prev.map((o, x) => x === i ? { ...o, imageUrl: url, uploading: false } : o));
+    } catch (err) {
+      toast(err.message || 'No se pudo subir la imagen');
+      setOptions(prev => prev.map((o, x) => x === i ? { ...o, uploading: false } : o));
+    }
+  }
+  function removeOptionImage(i) {
+    const opt = options[i];
+    if (opt?.imageUrl) deleteWallImage(opt.imageUrl, adminToken);
+    setOptions(prev => prev.map((o, x) => x === i ? { ...o, imageUrl: null } : o));
   }
   function resetForm() {
     setCreating(false);
     setQuestion('');
-    setOptions(['', '']);
+    setOptions([{ label: '', imageUrl: null }, { label: '', imageUrl: null }]);
   }
   function publish() {
-    const cleanOptions = options.map(o => o.trim()).filter(Boolean);
+    const cleanOptions = options.map(o => ({ label: o.label.trim(), imageUrl: o.imageUrl || null })).filter(o => o.label);
     if (!question.trim() || cleanOptions.length < 2) { toast('Escribe la pregunta y al menos 2 opciones'); return; }
     const poll = {
       id: uid(), question: question.trim(),
-      options: cleanOptions.map(label => ({ id: uid(), label })),
+      options: cleanOptions.map(o => ({ id: uid(), label: o.label, imageUrl: o.imageUrl })),
       votes: [], active: true, createdAt: new Date().toISOString()
     };
     savePolls([...polls, poll]);
@@ -1822,6 +1839,7 @@ function AdminEncuestas({ polls, savePolls, students, toast }) {
   }
   function removePoll(p) {
     if (!confirm('¿Eliminar esta encuesta y sus votos?')) return;
+    (p.options || []).forEach(o => { if (o.imageUrl) deleteWallImage(o.imageUrl, adminToken); });
     savePolls(polls.filter(x => x.id !== p.id));
     toast('Encuesta eliminada');
   }
@@ -1833,11 +1851,23 @@ function AdminEncuestas({ polls, savePolls, students, toast }) {
           <>
             <label>Pregunta</label>
             <input type="text" value={question} onChange={e => setQuestion(e.target.value)} placeholder="Ej. ¿Qué horario preferís para Balance Yoga?" />
-            <label>Opciones</label>
+            <label>Opciones (con foto opcional, ej. para elegir equipación)</label>
             {options.map((o, i) => (
-              <div className="row" key={i} style={{ alignItems: 'center', marginBottom: 6 }}>
-                <input type="text" value={o} onChange={e => updateOption(i, e.target.value)} placeholder={`Opción ${i + 1}`} style={{ width: 'auto', flex: 1 }} />
-                {options.length > 2 && <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => removeOption(i)}>Quitar</button>}
+              <div key={i} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 10, marginBottom: 8 }}>
+                <div className="row" style={{ alignItems: 'center' }}>
+                  <input type="text" value={o.label} onChange={e => updateOptionLabel(i, e.target.value)} placeholder={`Opción ${i + 1}`} style={{ width: 'auto', flex: 1 }} />
+                  {options.length > 2 && <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => removeOption(i)}>Quitar</button>}
+                </div>
+                {o.imageUrl ? (
+                  <div style={{ position: 'relative', marginTop: 8 }}>
+                    <img src={o.imageUrl} alt="" style={{ width: '100%', maxHeight: 160, objectFit: 'cover', borderRadius: 8, opacity: o.uploading ? 0.5 : 1 }} />
+                    <button className="linklike" style={{ color: 'var(--danger)', marginTop: 6 }} onClick={() => removeOptionImage(i)}>Quitar foto</button>
+                  </div>
+                ) : o.uploading ? (
+                  <p className="muted" style={{ marginTop: 6 }}>Subiendo imagen…</p>
+                ) : (
+                  <input type="file" accept="image/*" style={{ marginTop: 8 }} onChange={e => handleOptionImage(i, e.target.files[0])} />
+                )}
               </div>
             ))}
             {options.length < 5 && <button className="linklike" onClick={addOption}>+ Añadir opción</button>}
@@ -1867,9 +1897,12 @@ function AdminEncuestas({ polls, savePolls, students, toast }) {
                 const count = votes.filter(v => v.optionId === o.id).length;
                 const pct = total > 0 ? Math.round((count / total) * 100) : 0;
                 return (
-                  <div key={o.id} style={{ marginTop: 8 }}>
-                    <div className="row" style={{ justifyContent: 'space-between' }}>
-                      <span style={{ fontSize: 13.5 }}>{o.label}</span>
+                  <div key={o.id} style={{ marginTop: 10 }}>
+                    <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div className="row" style={{ alignItems: 'center', gap: 8 }}>
+                        {o.imageUrl && <img src={o.imageUrl} alt="" style={{ width: 32, height: 32, objectFit: 'cover', borderRadius: 6 }} />}
+                        <span style={{ fontSize: 13.5 }}>{o.label}</span>
+                      </div>
                       <span className="muted">{count} · {pct}%</span>
                     </div>
                     <div style={{ background: 'var(--cream-2)', borderRadius: 6, height: 8, marginTop: 4, overflow: 'hidden' }}>
