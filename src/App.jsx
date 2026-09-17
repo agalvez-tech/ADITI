@@ -101,6 +101,21 @@ const LATE_CANCEL_HOURS = 3;
 function classDateTime(b) { return new Date(`${b.date}T${b.time}`); }
 function isLateCancel(b) { return (classDateTime(b) - new Date()) / 3600000 < LATE_CANCEL_HOURS; }
 
+// Encuentra el bono del que hay que devolver la clase al cancelar. Las
+// reservas creadas antes de guardar 'purchaseId' en la propia reserva no
+// tienen ese enlace directo; para esas usamos como mejor aproximación el
+// bono de la alumna que estuviera vigente en la fecha de la clase.
+function findBonoPurchaseForBooking(b, purchases) {
+  if (b.purchaseId) {
+    const p = purchases.find(p => p.id === b.purchaseId);
+    if (p) return p;
+  }
+  const onDate = new Date(`${b.date}T12:00:00`);
+  return purchases
+    .filter(p => p.studentId === b.studentId && p.status === 'confirmado' && p.classesTotal !== null && new Date(p.expiryDate) >= onDate)
+    .sort((a, x) => new Date(a.expiryDate) - new Date(x.expiryDate))[0] || null;
+}
+
 // Cancela una reserva. Si se pagó con bono y se cancela con menos de
 // LATE_CANCEL_HOURS de antelación, la clase se queda descontada del bono
 // (penalización); con más antelación, se le devuelve la clase al bono.
@@ -108,9 +123,11 @@ function isLateCancel(b) { return (classDateTime(b) - new Date()) / 3600000 < LA
 function cancelBookingAndRefund(b, bookings, saveBookings, purchases, savePurchases) {
   const late = isLateCancel(b);
   saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'cancelada' } : x));
-  if (!late && b.paymentMethod === 'bono' && b.purchaseId && purchases && savePurchases) {
-    // Los bonos ilimitados (classesTotal null) no descuentan clases al reservar, así que tampoco hay nada que devolver.
-    savePurchases(purchases.map(p => p.id === b.purchaseId && p.classesTotal !== null ? { ...p, classesUsed: Math.max(0, (p.classesUsed || 0) - 1) } : p));
+  if (!late && b.paymentMethod === 'bono' && purchases && savePurchases) {
+    const purchase = findBonoPurchaseForBooking(b, purchases);
+    if (purchase) {
+      savePurchases(purchases.map(p => p.id === purchase.id ? { ...p, classesUsed: Math.max(0, (p.classesUsed || 0) - 1) } : p));
+    }
   }
   return late;
 }
