@@ -1894,8 +1894,10 @@ function AdminEncuestas({ polls, savePolls, students, adminToken, toast }) {
               </div>
               <p className="muted" style={{ marginTop: 4 }}>{total} voto{total === 1 ? '' : 's'} de {students.length} alumnas</p>
               {(p.options || []).map(o => {
-                const count = votes.filter(v => v.optionId === o.id).length;
+                const optVotes = votes.filter(v => v.optionId === o.id);
+                const count = optVotes.length;
                 const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+                const voterNames = optVotes.map(v => students.find(s => s.id === v.studentId)?.name || 'Alumna eliminada');
                 return (
                   <div key={o.id} style={{ marginTop: 10 }}>
                     <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1908,6 +1910,7 @@ function AdminEncuestas({ polls, savePolls, students, adminToken, toast }) {
                     <div style={{ background: 'var(--cream-2)', borderRadius: 6, height: 8, marginTop: 4, overflow: 'hidden' }}>
                       <div style={{ width: `${pct}%`, background: 'var(--plum)', height: '100%', borderRadius: 6 }} />
                     </div>
+                    {voterNames.length > 0 && <p className="muted" style={{ marginTop: 4, fontSize: 12 }}>{voterNames.join(', ')}</p>}
                   </div>
                 );
               })}
