@@ -1,5 +1,5 @@
 import { Redis } from '@upstash/redis';
-import { syncStudentContact, notifyBonoConfirmado, notifySueltaConfirmada, broadcastWallPost, broadcastPoll } from './_brevo.js';
+import { syncStudentContact, notifyBonoConfirmado, notifySueltaConfirmada, broadcastWallPost, broadcastPoll, broadcastHoliday } from './_brevo.js';
 
 const redis = Redis.fromEnv();
 
@@ -206,6 +206,11 @@ async function runBrevoSideEffects(key, value, diff, appBaseUrl) {
     await broadcastPoll(students, diff.item, appBaseUrl);
     return;
   }
+  if (key === 'holidays' && diff?.type === 'append') {
+    const students = (await redis.get('students')) || [];
+    await broadcastHoliday(students, diff.item);
+    return;
+  }
 }
 
 export default async function handler(req, res) {
@@ -235,7 +240,7 @@ export default async function handler(req, res) {
     }
     try {
       const { value } = req.body || {};
-      const needsDiff = key === 'bookings' || key === 'purchases' || key === 'wallPosts' || key === 'polls';
+      const needsDiff = key === 'bookings' || key === 'purchases' || key === 'wallPosts' || key === 'polls' || key === 'holidays';
       const current = needsDiff ? await redis.get(key) : undefined;
       const diff = needsDiff ? diffSingleChange(current, value) : null;
 

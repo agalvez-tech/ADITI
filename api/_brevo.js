@@ -115,6 +115,18 @@ export async function broadcastWallPost(students, title, content, imageUrl) {
   );
 }
 
+// Aviso por email cuando Beatriz marca un día como festivo/cerrado.
+export async function broadcastHoliday(students, holiday) {
+  if (!enabled() || !holiday) return;
+  const dateStr = new Date(`${holiday.date}T12:00:00`).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
+  const dateCap = dateStr.charAt(0).toUpperCase() + dateStr.slice(1);
+  const emails = (students || []).map(s => s.email).filter(Boolean);
+  const html = `<p>Os avisamos de que <b>${dateCap}</b> el centro estará cerrado${holiday.label ? ` (${holiday.label})` : ''} y no habrá clases ese día.</p><p>— Aditi Functional Yoga</p>`;
+  await Promise.allSettled(
+    emails.map(email => sendEmail(email, `Aditi: día festivo — ${dateCap}`, html))
+  );
+}
+
 // Manda la encuesta a cada alumna con un botón por opción para poder votar
 // con un solo clic desde el propio email, sin tener que abrir la app.
 // Cada enlace lleva su id de alumna incrustado para que el voto quede ligado

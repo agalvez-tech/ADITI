@@ -1286,11 +1286,17 @@ function AdminFestivos({ holidays, saveHolidays, toast }) {
   function add() {
     if (!date) { toast('Elige una fecha'); return; }
     if (holidays.some(h => h.date === date)) { toast('Ese día ya está marcado como festivo'); return; }
-    saveHolidays([...holidays, { id: uid(), date, label: label.trim() }]);
+    const holiday = { id: uid(), date, label: label.trim() };
+    saveHolidays([...holidays, holiday]);
     setAdding(false);
     setDate('');
     setLabel('');
-    toast('Día festivo añadido');
+    toast('Día festivo añadido, avisando a las alumnas…');
+    fetch('/api/notify-wall', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Día festivo', body: `${fmtDate(new Date(`${holiday.date}T12:00:00`))}${holiday.label ? ` · ${holiday.label}` : ''}: no hay clases` })
+    }).catch(() => {});
   }
   function remove(h) {
     if (!confirm(`¿Quitar el festivo del ${fmtDate(new Date(`${h.date}T12:00:00`))}?`)) return;
