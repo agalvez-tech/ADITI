@@ -95,6 +95,7 @@ function toMinutes(t) { const [h, m] = (t || '0:0').split(':').map(Number); retu
 function slotDuration(c) { return c.duration || 60; }
 const STATUS_LABELS = { confirmada: 'Confirmada', pendiente_pago: 'Pendiente de pago', cancelada: 'Cancelada', en_espera: 'En lista de espera' };
 const RECURRING_WEEKS = 10; // nº de semanas que se crean de golpe al añadir una alumna "fija"
+function isHoliday(holidays, dateIso) { return (holidays || []).find(h => h.date === dateIso); }
 
 // Cancelar con menos de estas horas de antelación no devuelve la clase al bono.
 const LATE_CANCEL_HOURS = 3;
@@ -140,6 +141,7 @@ export default function App() {
   const [purchases, setPurchases] = useState([]);
   const [wallPosts, setWallPosts] = useState([]);
   const [polls, setPolls] = useState([]);
+  const [holidays, setHolidays] = useState([]);
   const [schedule, setSchedule] = useState(DEFAULT_SCHEDULE);
   const [bonos, setBonos] = useState(DEFAULT_BONOS);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -162,14 +164,15 @@ export default function App() {
       return Promise.all([
         isAdmin ? getData('students', adminToken) : Promise.resolve(null),
         getData('bookings'), getData('purchases'), getData('wallPosts'), getData('polls'),
-        getData('schedule'), getData('bonos'), getData('settings')
-      ]).then(([s, b, p, w, pl, sch, bo, cfg]) => {
+        getData('schedule'), getData('bonos'), getData('settings'), getData('holidays')
+      ]).then(([s, b, p, w, pl, sch, bo, cfg, hol]) => {
         if (cancelled) return;
         if (isAdmin) setStudents(s || []);
         setBookings(b || []);
         setPurchases(p || []);
         setWallPosts(w || []);
         setPolls(pl || []);
+        setHolidays(hol || []);
         if (sch) setSchedule(sch);
         if (bo) setBonos(bo);
         if (cfg) setSettings({ ...DEFAULT_SETTINGS, ...cfg });
@@ -203,6 +206,7 @@ export default function App() {
   function savePurchases(next) { setPurchases(next); setData('purchases', next, adminToken); }
   function saveWallPosts(next) { setWallPosts(next); setData('wallPosts', next, adminToken); }
   function savePolls(next) { setPolls(next); setData('polls', next, adminToken); }
+  function saveHolidays(next) { setHolidays(next); setData('holidays', next, adminToken); }
   function saveSchedule(next) { setSchedule(next); setData('schedule', next, adminToken); }
   function saveBonos(next) { setBonos(next); setData('bonos', next, adminToken); }
   function saveSettings(next) { setSettings(next); setData('settings', next, adminToken); }
@@ -242,7 +246,7 @@ export default function App() {
           <MuroTab wallPosts={wallPosts} polls={polls} savePolls={savePolls} me={me} toast={toast} />
         ) : tab === 'horario' ? (
           <HorarioTab
-            bookings={bookings} schedule={schedule}
+            bookings={bookings} schedule={schedule} holidays={holidays}
             onPickClass={(cls, dateIso, day) => setModal({ type: 'booking', day, cls, dateIso })}
           />
         ) : tab === 'bonos' ? (
@@ -258,7 +262,7 @@ export default function App() {
         ) : tab === 'admin' ? (
           <AdminTab adminTab={adminTab} setAdminTab={setAdminTab}
             students={students} saveStudents={saveStudents} bookings={bookings} purchases={purchases} wallPosts={wallPosts}
-            polls={polls} savePolls={savePolls}
+            polls={polls} savePolls={savePolls} holidays={holidays} saveHolidays={saveHolidays}
             activePurchaseFor={activePurchaseFor} adminToken={adminToken}
             schedule={schedule} saveSchedule={saveSchedule} bonos={bonos} saveBonos={saveBonos}
             settings={settings} saveSettings={saveSettings} onAdminLogout={logoutAdmin}
@@ -392,7 +396,7 @@ function PollCard({ poll, me, polls, savePolls, toast }) {
 }
 
 /* ---------------- HORARIO ---------------- */
-function HorarioTab({ bookings, schedule, onPickClass }) {
+function HorarioTab({ bookings, schedule, holidays, onPickClass }) {
   const settings = useContext(SettingsContext);
   const [weekStart, setWeekStart] = useState(() => startOfWeekMonday(new Date()));
   const [monthCursor, setMonthCursor] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
@@ -403,7 +407,7 @@ function HorarioTab({ bookings, schedule, onPickClass }) {
   return (
     <>
       <MiniMonthCalendar
-        monthCursor={monthCursor} setMonthCursor={setMonthCursor} weekStart={weekStart}
+        monthCursor={monthCursor} setMonthCursor={setMonthCursor} weekStart={weekStart} holidays={holidays}
         onPickDate={(date) => setWeekStart(startOfWeekMonday(date))}
       />
       <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between', margin: '18px 0 10px' }}>
@@ -413,15 +417,18 @@ function HorarioTab({ bookings, schedule, onPickClass }) {
       </div>
       {weekDates.map(date => {
         const dayName = dayNameForDate(date);
-        const classes = schedule[dayName] || [];
         const dateIso = isoDate(date);
+        const holiday = isHoliday(holidays, dateIso);
+        const classes = holiday ? [] : (schedule[dayName] || []);
         const isToday = sameDate(date, new Date());
         return (
           <div key={dateIso} style={{ marginBottom: 18 }}>
             <div className="sectionlabel" style={{ margin: '0 0 8px', textTransform: 'none' }}>
               {dayName} {date.getDate()} {isToday && <span className="pill pill-lav" style={{ marginLeft: 6 }}>Hoy</span>}
             </div>
-            {classes.length === 0 ? (
+            {holiday ? (
+              <div className="muted" style={{ padding: '4px 0 8px' }}>Festivo{holiday.label ? `: ${holiday.label}` : ''} — no hay clases este día.</div>
+            ) : classes.length === 0 ? (
               <div className="muted" style={{ padding: '4px 0 8px' }}>Sin clases este día.</div>
             ) : classes.map((c, idx) => {
               const cap = c.capacity || settings.defaultCapacity;
@@ -447,7 +454,7 @@ function HorarioTab({ bookings, schedule, onPickClass }) {
   );
 }
 
-function MiniMonthCalendar({ monthCursor, setMonthCursor, weekStart, onPickDate }) {
+function MiniMonthCalendar({ monthCursor, setMonthCursor, weekStart, onPickDate, holidays }) {
   const month = monthCursor.getMonth();
   const gridStart = startOfWeekMonday(new Date(monthCursor.getFullYear(), month, 1));
   const days = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
@@ -467,16 +474,18 @@ function MiniMonthCalendar({ monthCursor, setMonthCursor, weekStart, onPickDate 
           const inMonth = d.getMonth() === month;
           const inWeek = weekDates.some(w => sameDate(w, d));
           const isToday = sameDate(d, today);
+          const holiday = isHoliday(holidays, isoDate(d));
           return (
-            <div key={isoDate(d)} onClick={() => onPickDate(d)}
+            <div key={isoDate(d)} onClick={() => onPickDate(d)} title={holiday?.label || undefined}
               style={{
                 padding: '6px 0', borderRadius: 8, cursor: 'pointer', fontSize: 12.5,
                 opacity: inMonth ? 1 : 0.32,
                 background: inWeek ? 'var(--lav-pale)' : 'transparent',
                 fontWeight: isToday ? 700 : 400,
-                color: isToday ? 'var(--plum)' : 'var(--ink)'
+                color: holiday ? 'var(--danger)' : isToday ? 'var(--plum)' : 'var(--ink)'
               }}>
               {d.getDate()}
+              {holiday && <div style={{ width: 4, height: 4, borderRadius: 2, background: 'var(--danger)', margin: '2px auto 0' }} />}
             </div>
           );
         })}
@@ -1098,7 +1107,7 @@ function AdminEstadisticas({ students, purchases, bookings, bonos }) {
   );
 }
 
-function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, polls, savePolls, activePurchaseFor, adminToken, schedule, saveSchedule, bonos, saveBonos, settings, saveSettings, onAdminLogout, savePurchases, saveBookings, saveWallPosts, toast }) {
+function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, polls, savePolls, holidays, saveHolidays, activePurchaseFor, adminToken, schedule, saveSchedule, bonos, saveBonos, settings, saveSettings, onAdminLogout, savePurchases, saveBookings, saveWallPosts, toast }) {
   const [alumnaSearch, setAlumnaSearch] = useState('');
   const tabs = [
     { id: 'estadisticas', label: 'Estadísticas' },
@@ -1124,7 +1133,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
         <AdminEstadisticas students={students} purchases={purchases} bookings={bookings} bonos={bonos} />
       )}
       {adminTab === 'resumen' && (
-        <AdminResumen students={students} bookings={bookings} saveBookings={saveBookings} schedule={schedule} toast={toast} />
+        <AdminResumen students={students} bookings={bookings} saveBookings={saveBookings} schedule={schedule} holidays={holidays} toast={toast} />
       )}
       {adminTab === 'alumnas' && (
         <>
@@ -1244,7 +1253,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
               })}
         </>
       )}
-      {adminTab === 'horarios' && <AdminHorarios schedule={schedule} saveSchedule={saveSchedule} toast={toast} />}
+      {adminTab === 'horarios' && <AdminHorarios schedule={schedule} saveSchedule={saveSchedule} holidays={holidays} saveHolidays={saveHolidays} toast={toast} />}
       {adminTab === 'gestionbonos' && <AdminBonos bonos={bonos} saveBonos={saveBonos} toast={toast} />}
       {adminTab === 'muro' && <AdminMuro wallPosts={wallPosts} saveWallPosts={saveWallPosts} adminToken={adminToken} toast={toast} />}
       {adminTab === 'encuestas' && <AdminEncuestas polls={polls} savePolls={savePolls} students={students} adminToken={adminToken} toast={toast} />}
@@ -1254,17 +1263,61 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
   );
 }
 
-function AdminHorarios({ schedule, saveSchedule, toast }) {
+function AdminHorarios({ schedule, saveSchedule, holidays, saveHolidays, toast }) {
   const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
   function updateDay(day, classes) {
     saveSchedule({ ...schedule, [day]: classes });
   }
   return (
     <>
+      <AdminFestivos holidays={holidays} saveHolidays={saveHolidays} toast={toast} />
       {days.map(day => (
         <AdminHorarioDay key={day} day={day} classes={schedule[day] || []} onChange={(next) => updateDay(day, next)} />
       ))}
     </>
+  );
+}
+
+function AdminFestivos({ holidays, saveHolidays, toast }) {
+  const [adding, setAdding] = useState(false);
+  const [date, setDate] = useState('');
+  const [label, setLabel] = useState('');
+
+  function add() {
+    if (!date) { toast('Elige una fecha'); return; }
+    if (holidays.some(h => h.date === date)) { toast('Ese día ya está marcado como festivo'); return; }
+    saveHolidays([...holidays, { id: uid(), date, label: label.trim() }]);
+    setAdding(false);
+    setDate('');
+    setLabel('');
+    toast('Día festivo añadido');
+  }
+  function remove(h) {
+    if (!confirm(`¿Quitar el festivo del ${fmtDate(new Date(`${h.date}T12:00:00`))}?`)) return;
+    saveHolidays(holidays.filter(x => x.id !== h.id));
+  }
+
+  return (
+    <div className="card">
+      <h3>Días festivos (sin clases)</h3>
+      {holidays.length === 0 && <p className="muted">No hay ningún día festivo marcado.</p>}
+      {[...holidays].sort((a, b) => a.date.localeCompare(b.date)).map(h => (
+        <div key={h.id} className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+          <span>{fmtDate(new Date(`${h.date}T12:00:00`))}{h.label ? ` · ${h.label}` : ''}</span>
+          <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => remove(h)}>Quitar</button>
+        </div>
+      ))}
+      {adding ? (
+        <div className="row" style={{ marginTop: 10, alignItems: 'center' }}>
+          <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ width: 150, flex: 'none' }} />
+          <input type="text" value={label} onChange={e => setLabel(e.target.value)} placeholder="Motivo (opcional, ej. Navidad)" style={{ width: 'auto', flex: 1 }} />
+          <button className="btn btn-sage btn-sm" onClick={add}>Añadir</button>
+          <button className="linklike" onClick={() => setAdding(false)}>Cancelar</button>
+        </div>
+      ) : (
+        <button className="linklike" style={{ marginTop: 10 }} onClick={() => setAdding(true)}>+ Marcar un día como festivo</button>
+      )}
+    </div>
   );
 }
 
@@ -1414,7 +1467,7 @@ function AdminBonos({ bonos, saveBonos, toast }) {
   );
 }
 
-function AdminResumen({ students, bookings, saveBookings, schedule, toast }) {
+function AdminResumen({ students, bookings, saveBookings, schedule, holidays, toast }) {
   const settings = useContext(SettingsContext);
   const [offset, setOffset] = useState(0);
   const [creatingExtra, setCreatingExtra] = useState(false);
@@ -1426,7 +1479,8 @@ function AdminResumen({ students, bookings, saveBookings, schedule, toast }) {
   const date = addDays(new Date(), offset);
   const dateIso = isoDate(date);
   const dayName = Object.keys(DAY_INDEX).find(k => DAY_INDEX[k] === date.getDay());
-  const classes = schedule[dayName] || [];
+  const holiday = isHoliday(holidays, dateIso);
+  const classes = holiday ? [] : (schedule[dayName] || []);
 
   const scheduledKeys = new Set(classes.map(c => `${c.time}|${c.name}`));
   const extraFromBookings = [];
@@ -1475,6 +1529,12 @@ function AdminResumen({ students, bookings, saveBookings, schedule, toast }) {
         </div>
         <button className="btn btn-outline btn-sm" onClick={() => setOffset(offset + 1)}>Siguiente →</button>
       </div>
+      {holiday && (
+        <div className="card" style={{ borderColor: 'var(--danger)' }}>
+          <b>Festivo{holiday.label ? `: ${holiday.label}` : ''}</b>
+          <p className="muted" style={{ marginTop: 4 }}>No se muestran las clases programadas de este día.</p>
+        </div>
+      )}
       {allClasses.length === 0 ? (
         <div className="empty">No hay clases programadas este día.</div>
       ) : (

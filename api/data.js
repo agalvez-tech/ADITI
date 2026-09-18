@@ -5,16 +5,16 @@ const redis = Redis.fromEnv();
 
 // Solo se permite leer/escribir estas claves compartidas.
 // Evita que alguien use el endpoint para escribir cualquier cosa en tu Redis.
-const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts', 'schedule', 'bonos', 'settings', 'polls'];
+const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts', 'schedule', 'bonos', 'settings', 'polls', 'holidays'];
 
 // 'students' contiene datos personales de todas las alumnas: ni lectura ni
 // escritura completas sin ser admin (las alumnas usan api/student-profile.js
 // para su propia ficha, así nunca reciben el listado completo).
 const ADMIN_ONLY_READ_KEYS = ['students'];
 
-// 'wallPosts' (el Muro), 'schedule' (horarios), 'bonos' y 'settings' los lee
-// cualquier alumna, pero solo Beatriz los edita.
-const ADMIN_ONLY_WRITE_KEYS = ['students', 'wallPosts', 'schedule', 'bonos', 'settings'];
+// 'wallPosts' (el Muro), 'schedule' (horarios), 'bonos', 'settings' y
+// 'holidays' (días festivos) los lee cualquier alumna, pero solo Beatriz los edita.
+const ADMIN_ONLY_WRITE_KEYS = ['students', 'wallPosts', 'schedule', 'bonos', 'settings', 'holidays'];
 
 // Para 'bookings' y 'purchases', las alumnas sí necesitan poder crear su propia
 // reserva/compra sin ser admin. Sin token, solo se permite un cambio mínimo y
@@ -71,7 +71,7 @@ function classCapacityFor(schedule, item) {
   return (slot && slot.capacity) || CLASS_CAPACITY;
 }
 
-function isBookingChangeAllowed(diff, current, schedule) {
+function isBookingChangeAllowed(diff, current, schedule, holidays) {
   if (!diff) return false;
   if (diff.type === 'noop') return true;
 
@@ -94,6 +94,9 @@ function isBookingChangeAllowed(diff, current, schedule) {
   // Solo altas nuevas: pendiente de pago (bizum/tarjeta) o confirmada por bono propio.
   const validNew = item.status === 'pendiente_pago' || (item.status === 'confirmada' && item.paymentMethod === 'bono');
   if (!validNew) return false;
+
+  // Día marcado como festivo por Beatriz: no se admiten reservas nuevas.
+  if ((holidays || []).some(h => h.date === item.date)) return false;
 
   // 'en_espera' (lista de espera, la crea solo Beatriz) no ocupa plaza real.
   const occupied = (Array.isArray(current) ? current : [])
@@ -240,7 +243,8 @@ export default async function handler(req, res) {
         let allowed;
         if (key === 'bookings') {
           const schedule = await redis.get('schedule');
-          allowed = isBookingChangeAllowed(diff, current, schedule);
+          const holidays = await redis.get('holidays');
+          allowed = isBookingChangeAllowed(diff, current, schedule, holidays);
         } else if (key === 'purchases') {
           allowed = isPurchaseChangeAllowed(diff);
         } else {
