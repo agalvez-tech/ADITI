@@ -398,55 +398,52 @@ function PollCard({ poll, me, polls, savePolls, toast }) {
 /* ---------------- HORARIO ---------------- */
 function HorarioTab({ bookings, schedule, holidays, onPickClass }) {
   const settings = useContext(SettingsContext);
-  const [weekStart, setWeekStart] = useState(() => startOfWeekMonday(new Date()));
+  const [selectedDate, setSelectedDate] = useState(() => new Date());
   const [monthCursor, setMonthCursor] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
 
-  const weekDates = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
-  const isCurrentWeek = sameDate(weekStart, startOfWeekMonday(new Date()));
+  const dayName = dayNameForDate(selectedDate);
+  const dateIso = isoDate(selectedDate);
+  const holiday = isHoliday(holidays, dateIso);
+  const classes = holiday ? [] : (schedule[dayName] || []);
+  const isToday = sameDate(selectedDate, new Date());
+
+  function pickDate(date) {
+    setSelectedDate(date);
+    setMonthCursor(new Date(date.getFullYear(), date.getMonth(), 1));
+  }
 
   return (
     <>
       <MiniMonthCalendar
-        monthCursor={monthCursor} setMonthCursor={setMonthCursor} weekStart={weekStart} holidays={holidays}
-        onPickDate={(date) => setWeekStart(startOfWeekMonday(date))}
+        monthCursor={monthCursor} setMonthCursor={setMonthCursor} selectedDate={selectedDate} holidays={holidays}
+        onPickDate={pickDate}
       />
       <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between', margin: '18px 0 10px' }}>
-        <button className="btn btn-outline btn-sm" onClick={() => setWeekStart(addDays(weekStart, -7))}>← Semana anterior</button>
-        {!isCurrentWeek && <button className="linklike" onClick={() => setWeekStart(startOfWeekMonday(new Date()))}>Ir a hoy</button>}
-        <button className="btn btn-outline btn-sm" onClick={() => setWeekStart(addDays(weekStart, 7))}>Siguiente →</button>
+        <button className="btn btn-outline btn-sm" onClick={() => pickDate(addDays(selectedDate, -1))}>← Anterior</button>
+        <div style={{ textAlign: 'center' }}>
+          <div className="serif" style={{ fontWeight: 600, fontSize: 17 }}>{fmtDate(selectedDate)}</div>
+          {!isToday && <button className="linklike" onClick={() => pickDate(new Date())}>Volver a hoy</button>}
+        </div>
+        <button className="btn btn-outline btn-sm" onClick={() => pickDate(addDays(selectedDate, 1))}>Siguiente →</button>
       </div>
-      {weekDates.map(date => {
-        const dayName = dayNameForDate(date);
-        const dateIso = isoDate(date);
-        const holiday = isHoliday(holidays, dateIso);
-        const classes = holiday ? [] : (schedule[dayName] || []);
-        const isToday = sameDate(date, new Date());
+      {holiday ? (
+        <div className="muted" style={{ padding: '4px 0 8px' }}>Festivo{holiday.label ? `: ${holiday.label}` : ''} — no hay clases este día.</div>
+      ) : classes.length === 0 ? (
+        <div className="muted" style={{ padding: '4px 0 8px' }}>Sin clases este día.</div>
+      ) : classes.map((c, idx) => {
+        const cap = c.capacity || settings.defaultCapacity;
+        const attendees = bookings.filter(b => b.date === dateIso && b.time === c.time && b.className === c.name && occupiesSpot(b.status)).length;
+        const full = attendees >= cap;
         return (
-          <div key={dateIso} style={{ marginBottom: 18 }}>
-            <div className="sectionlabel" style={{ margin: '0 0 8px', textTransform: 'none' }}>
-              {dayName} {date.getDate()} {isToday && <span className="pill pill-lav" style={{ marginLeft: 6 }}>Hoy</span>}
+          <div className="classcard" key={idx} onClick={() => onPickClass(c, dateIso, dayName)}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
+              <div className="time">{c.time}</div>
+              <div className="name">{c.name}</div>
             </div>
-            {holiday ? (
-              <div className="muted" style={{ padding: '4px 0 8px' }}>Festivo{holiday.label ? `: ${holiday.label}` : ''} — no hay clases este día.</div>
-            ) : classes.length === 0 ? (
-              <div className="muted" style={{ padding: '4px 0 8px' }}>Sin clases este día.</div>
-            ) : classes.map((c, idx) => {
-              const cap = c.capacity || settings.defaultCapacity;
-              const attendees = bookings.filter(b => b.date === dateIso && b.time === c.time && b.className === c.name && occupiesSpot(b.status)).length;
-              const full = attendees >= cap;
-              return (
-                <div className="classcard" key={idx} onClick={() => onPickClass(c, dateIso, dayName)}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
-                    <div className="time">{c.time}</div>
-                    <div className="name">{c.name}</div>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span className="muted" style={{ fontSize: 12 }}>{attendees}/{cap}</span>
-                    <span className={`pill ${full ? 'pill-gray' : (CLASS_STYLE[c.name] || 'pill-lav')}`}>{full ? 'Completo' : 'Reservar'}</span>
-                  </div>
-                </div>
-              );
-            })}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span className="muted" style={{ fontSize: 12 }}>{attendees}/{cap}</span>
+              <span className={`pill ${full ? 'pill-gray' : (CLASS_STYLE[c.name] || 'pill-lav')}`}>{full ? 'Completo' : 'Reservar'}</span>
+            </div>
           </div>
         );
       })}
@@ -454,11 +451,10 @@ function HorarioTab({ bookings, schedule, holidays, onPickClass }) {
   );
 }
 
-function MiniMonthCalendar({ monthCursor, setMonthCursor, weekStart, onPickDate, holidays }) {
+function MiniMonthCalendar({ monthCursor, setMonthCursor, selectedDate, onPickDate, holidays }) {
   const month = monthCursor.getMonth();
   const gridStart = startOfWeekMonday(new Date(monthCursor.getFullYear(), month, 1));
   const days = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
-  const weekDates = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
   const today = new Date();
 
   return (
@@ -472,7 +468,7 @@ function MiniMonthCalendar({ monthCursor, setMonthCursor, weekStart, onPickDate,
         {WEEKDAY_LETTERS.map(l => <div key={l} className="muted" style={{ fontSize: 11, fontWeight: 600 }}>{l}</div>)}
         {days.map(d => {
           const inMonth = d.getMonth() === month;
-          const inWeek = weekDates.some(w => sameDate(w, d));
+          const isSelected = sameDate(d, selectedDate);
           const isToday = sameDate(d, today);
           const holiday = isHoliday(holidays, isoDate(d));
           return (
@@ -480,12 +476,12 @@ function MiniMonthCalendar({ monthCursor, setMonthCursor, weekStart, onPickDate,
               style={{
                 padding: '6px 0', borderRadius: 8, cursor: 'pointer', fontSize: 12.5,
                 opacity: inMonth ? 1 : 0.32,
-                background: inWeek ? 'var(--lav-pale)' : 'transparent',
-                fontWeight: isToday ? 700 : 400,
-                color: holiday ? 'var(--danger)' : isToday ? 'var(--plum)' : 'var(--ink)'
+                background: isSelected ? 'var(--plum)' : 'transparent',
+                fontWeight: isToday || isSelected ? 700 : 400,
+                color: isSelected ? '#fff' : holiday ? 'var(--danger)' : isToday ? 'var(--plum)' : 'var(--ink)'
               }}>
               {d.getDate()}
-              {holiday && <div style={{ width: 4, height: 4, borderRadius: 2, background: 'var(--danger)', margin: '2px auto 0' }} />}
+              {holiday && <div style={{ width: 4, height: 4, borderRadius: 2, background: isSelected ? '#fff' : 'var(--danger)', margin: '2px auto 0' }} />}
             </div>
           );
         })}
