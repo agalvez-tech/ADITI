@@ -2015,6 +2015,12 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
       toast('No se pudo iniciar el pago con tarjeta. Puedes pagar por Bizum.');
     }
   }
+  function joinWaitlist() {
+    const booking = { id: uid(), studentId: me.id, day, time: cls.time, className: cls.name, date: dateIso, status: 'en_espera', createdAt: new Date().toISOString() };
+    saveBookings([...bookings, booking]);
+    toast('Apuntada a la lista de espera. Te avisaremos por email y notificación si se libera una plaza.');
+    onClose();
+  }
 
   const capacity = cls.capacity || settings.defaultCapacity;
   const attendeeCount = dateIso ? bookings.filter(b => b.date === dateIso && b.time === cls.time && b.className === cls.name && occupiesSpot(b.status)).length : 0;
@@ -2027,7 +2033,18 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
       if (already) {
         step2 = <p className="muted" style={{ marginTop: 12 }}>Ya tienes esta clase reservada ese día.</p>;
       } else if (full) {
-        step2 = <p className="muted" style={{ marginTop: 12 }}>Esta clase ya está completa (máximo {capacity} alumnas). Elige otra fecha.</p>;
+        const onWaitlist = bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === cls.time && b.className === cls.name && b.status === 'en_espera');
+        step2 = onWaitlist ? (
+          <p className="muted" style={{ marginTop: 12 }}>Ya estás en la lista de espera de esta clase. Te avisaremos si se libera una plaza.</p>
+        ) : (
+          <>
+            <p className="muted" style={{ marginTop: 12 }}>Esta clase ya está completa (máximo {capacity} alumnas).</p>
+            <div className="optionbox" onClick={joinWaitlist}>
+              <div className="t">Apuntarme a la lista de espera</div>
+              <div className="s">Te avisamos por email y notificación si se libera una plaza</div>
+            </div>
+          </>
+        );
       } else {
         const active = activePurchaseFor(me.id, new Date(dateIso));
         step2 = (

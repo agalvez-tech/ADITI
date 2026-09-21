@@ -102,6 +102,22 @@ export async function notifySueltaConfirmada(student, booking) {
   );
 }
 
+// Avisa a la siguiente alumna en lista de espera cuando se libera una plaza
+// (alguien ha cancelado). Es solo un aviso: la plaza no se le reserva
+// automáticamente, tiene que entrar en la app y apuntarse ella misma antes
+// de que se la lleve otra persona.
+export async function notifyWaitlistSpotOpen(student, booking) {
+  if (!student) return;
+  await sendEmail(
+    student.email,
+    '¡Se ha liberado una plaza!',
+    `<p>Hola ${(student.name || '').split(' ')[0]},</p>
+     <p>Se ha liberado una plaza en <b>${booking.className}</b> el ${new Date(booking.date).toLocaleDateString('es-ES')} a las ${booking.time}, la clase en la que estabas en lista de espera.</p>
+     <p>Entra en la app y resérvala si te interesa — las plazas son limitadas y se dan por orden de llegada.</p>
+     <p>— Aditi Functional Yoga</p>`
+  );
+}
+
 // Aviso por email cuando Beatriz publica algo en el Muro (además del push).
 // Cada alumna recibe su propio email individual, nunca se exponen las
 // direcciones de las demás.

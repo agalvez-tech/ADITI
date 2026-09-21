@@ -1,5 +1,6 @@
 import { Redis } from '@upstash/redis';
-import { syncStudentContact, notifyBonoConfirmado, notifySueltaConfirmada, broadcastWallPost, broadcastPoll, broadcastHoliday } from './_brevo.js';
+import { syncStudentContact, notifyBonoConfirmado, notifySueltaConfirmada, broadcastWallPost, broadcastPoll, broadcastHoliday, notifyWaitlistSpotOpen } from './_brevo.js';
+import { notifyStudentPush } from './_push.js';
 
 const redis = Redis.fromEnv();
 
@@ -91,18 +92,30 @@ function isBookingChangeAllowed(diff, current, schedule, holidays) {
 
   if (diff.type !== 'append') return false; // ninguna otra modificación permitida sin token
   const item = diff.item || {};
-  // Solo altas nuevas: pendiente de pago (bizum/tarjeta) o confirmada por bono propio.
-  const validNew = item.status === 'pendiente_pago' || (item.status === 'confirmada' && item.paymentMethod === 'bono');
+  // Solo altas nuevas: pendiente de pago (bizum/tarjeta), confirmada por bono
+  // propio, o apuntarse una misma a la lista de espera de una clase completa.
+  const validNew = item.status === 'pendiente_pago' || (item.status === 'confirmada' && item.paymentMethod === 'bono') || item.status === 'en_espera';
   if (!validNew) return false;
 
   // Día marcado como festivo por Beatriz: no se admiten reservas nuevas.
   if ((holidays || []).some(h => h.date === item.date)) return false;
 
-  // 'en_espera' (lista de espera, la crea solo Beatriz) no ocupa plaza real.
-  const occupied = (Array.isArray(current) ? current : [])
+  const cur = Array.isArray(current) ? current : [];
+  // 'en_espera' (lista de espera) no ocupa plaza real.
+  const occupied = cur
     .filter(b => b.date === item.date && b.time === item.time && b.className === item.className && b.status !== 'cancelada' && b.status !== 'en_espera')
     .length;
-  return occupied < classCapacityFor(schedule, item);
+  const capacity = classCapacityFor(schedule, item);
+
+  if (item.status === 'en_espera') {
+    // Solo tiene sentido apuntarse a la lista de espera si la clase está
+    // completa, y no se puede duplicar la propia entrada.
+    const alreadyThere = cur.some(b => b.studentId === item.studentId && b.date === item.date && b.time === item.time && b.className === item.className && b.status !== 'cancelada');
+    if (alreadyThere) return false;
+    return occupied >= capacity;
+  }
+
+  return occupied < capacity;
 }
 
 function isPollChangeAllowed(diff) {
@@ -154,6 +167,34 @@ function isPurchaseChangeAllowed(diff) {
   return false;
 }
 
+// Al cancelarse una reserva, si esa clase tiene lista de espera y ya hay
+// hueco real, avisa (email + push) a la alumna que lleva más tiempo
+// esperando, para que sea ella quien decida entrar a reservarlo. No la
+// apunta automáticamente. Marca la entrada con notifiedAt para no
+// repetirle el aviso si se libera y se vuelve a ocupar varias veces.
+async function notifyNextWaitlisted(cancelledBooking, allBookings) {
+  const { date, time, className } = cancelledBooking;
+  const cur = Array.isArray(allBookings) ? allBookings : [];
+  const occupied = cur.filter(b => b.date === date && b.time === time && b.className === className && b.status !== 'cancelada' && b.status !== 'en_espera').length;
+  const schedule = await redis.get('schedule');
+  const capacity = classCapacityFor(schedule, cancelledBooking);
+  if (occupied >= capacity) return; // no hay hueco real (p.ej. ya lo cogió otra persona)
+
+  const waitlist = cur
+    .filter(b => b.date === date && b.time === time && b.className === className && b.status === 'en_espera' && !b.notifiedAt)
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  const next = waitlist[0];
+  if (!next) return;
+
+  const students = (await redis.get('students')) || [];
+  const student = students.find(s => s.id === next.studentId);
+  if (student) await notifyWaitlistSpotOpen(student, next);
+  await notifyStudentPush(next.studentId, 'Se ha liberado una plaza', `${next.className} · ${new Date(`${next.date}T12:00:00`).toLocaleDateString('es-ES')} a las ${next.time}`);
+
+  const updated = cur.map(b => b.id === next.id ? { ...b, notifiedAt: new Date().toISOString() } : b);
+  await redis.set('bookings', updated);
+}
+
 // Dispara las integraciones de Brevo según qué colección cambió. No hace
 // nada si BREVO_API_KEY no está configurada (ver api/_brevo.js).
 async function runBrevoSideEffects(key, value, diff, appBaseUrl) {
@@ -194,6 +235,12 @@ async function runBrevoSideEffects(key, value, diff, appBaseUrl) {
     const students = (await redis.get('students')) || [];
     const student = students.find(s => s.id === diff.item.studentId);
     await notifySueltaConfirmada(student, diff.item);
+    return;
+  }
+  if (key === 'bookings' && diff?.type === 'modify' && diff.before.status !== 'cancelada' && diff.after.status === 'cancelada') {
+    // Alguien ha cancelado (alumna o Beatriz): si esa clase tiene lista de
+    // espera, avisamos a la siguiente por si quiere quedarse con la plaza.
+    await notifyNextWaitlisted(diff.after, value);
     return;
   }
   if (key === 'wallPosts' && diff?.type === 'append') {
