@@ -102,10 +102,6 @@ function isBookingChangeAllowed(diff, current, schedule, holidays) {
 
   const cur = Array.isArray(current) ? current : [];
 
-  // Como mucho una clase (o lista de espera) por alumna y día.
-  const alreadyThatDay = cur.some(b => b.studentId === item.studentId && b.date === item.date && b.status !== 'cancelada');
-  if (alreadyThatDay) return false;
-
   // 'en_espera' (lista de espera) no ocupa plaza real.
   const occupied = cur
     .filter(b => b.date === item.date && b.time === item.time && b.className === item.className && b.status !== 'cancelada' && b.status !== 'en_espera')
@@ -113,7 +109,10 @@ function isBookingChangeAllowed(diff, current, schedule, holidays) {
   const capacity = classCapacityFor(schedule, item);
 
   if (item.status === 'en_espera') {
-    // Solo tiene sentido apuntarse a la lista de espera si la clase está completa.
+    // Solo tiene sentido apuntarse a la lista de espera si la clase está
+    // completa, y no se puede duplicar la propia entrada.
+    const alreadyThere = cur.some(b => b.studentId === item.studentId && b.date === item.date && b.time === item.time && b.className === item.className && b.status !== 'cancelada');
+    if (alreadyThere) return false;
     return occupied >= capacity;
   }
 

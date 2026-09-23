@@ -434,10 +434,9 @@ function HorarioTab({ bookings, schedule, holidays, me, onPickClass }) {
         const cap = c.capacity || settings.defaultCapacity;
         const attendees = bookings.filter(b => b.date === dateIso && b.time === c.time && b.className === c.name && occupiesSpot(b.status)).length;
         const full = attendees >= cap;
-        const isMyBooking = me && bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === c.time && b.className === c.name && b.status !== 'cancelada');
-        const bookedOtherThatDay = !isMyBooking && me && bookings.some(b => b.studentId === me.id && b.date === dateIso && b.status !== 'cancelada');
-        const pillLabel = isMyBooking ? 'Reservada' : full ? 'Completo' : bookedOtherThatDay ? 'No disponible' : 'Reservar';
-        const pillClass = isMyBooking ? 'pill-sage' : (full || bookedOtherThatDay) ? 'pill-gray' : (CLASS_STYLE[c.name] || 'pill-lav');
+        const isMyBooking = me && bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === c.time && b.className === c.name && occupiesSpot(b.status));
+        const pillLabel = isMyBooking ? 'Reservada' : full ? 'Completo' : 'Reservar';
+        const pillClass = isMyBooking ? 'pill-sage' : full ? 'pill-gray' : (CLASS_STYLE[c.name] || 'pill-lav');
         return (
           <div className="classcard" key={idx} onClick={() => onPickClass(c, dateIso, dayName)}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
@@ -2033,12 +2032,9 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
   if (dateIso) {
     const full = attendeeCount >= capacity;
     if (me) {
-      const already = bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === cls.time && b.className === cls.name && b.status !== 'cancelada');
-      const otroEseDia = !already && bookings.some(b => b.studentId === me.id && b.date === dateIso && b.status !== 'cancelada');
+      const already = bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === cls.time && b.className === cls.name && occupiesSpot(b.status));
       if (already) {
         step2 = <p className="muted" style={{ marginTop: 12 }}>Ya tienes esta clase reservada ese día.</p>;
-      } else if (otroEseDia) {
-        step2 = <p className="muted" style={{ marginTop: 12 }}>Ya tienes otra clase reservada ese día. Solo se puede reservar una clase por día.</p>;
       } else if (full) {
         const onWaitlist = bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === cls.time && b.className === cls.name && b.status === 'en_espera');
         step2 = onWaitlist ? (
