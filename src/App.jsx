@@ -2029,9 +2029,12 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
   if (dateIso) {
     const full = attendeeCount >= capacity;
     if (me) {
-      const already = bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === cls.time && b.className === cls.name && occupiesSpot(b.status));
+      const already = bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === cls.time && b.className === cls.name && b.status !== 'cancelada');
+      const otroEseDia = !already && bookings.some(b => b.studentId === me.id && b.date === dateIso && b.status !== 'cancelada');
       if (already) {
         step2 = <p className="muted" style={{ marginTop: 12 }}>Ya tienes esta clase reservada ese día.</p>;
+      } else if (otroEseDia) {
+        step2 = <p className="muted" style={{ marginTop: 12 }}>Ya tienes otra clase reservada ese día. Solo se puede reservar una clase por día.</p>;
       } else if (full) {
         const onWaitlist = bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === cls.time && b.className === cls.name && b.status === 'en_espera');
         step2 = onWaitlist ? (
