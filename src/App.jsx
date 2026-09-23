@@ -246,7 +246,7 @@ export default function App() {
           <MuroTab wallPosts={wallPosts} polls={polls} savePolls={savePolls} me={me} toast={toast} />
         ) : tab === 'horario' ? (
           <HorarioTab
-            bookings={bookings} schedule={schedule} holidays={holidays}
+            bookings={bookings} schedule={schedule} holidays={holidays} me={me}
             onPickClass={(cls, dateIso, day) => setModal({ type: 'booking', day, cls, dateIso })}
           />
         ) : tab === 'bonos' ? (
@@ -396,7 +396,7 @@ function PollCard({ poll, me, polls, savePolls, toast }) {
 }
 
 /* ---------------- HORARIO ---------------- */
-function HorarioTab({ bookings, schedule, holidays, onPickClass }) {
+function HorarioTab({ bookings, schedule, holidays, me, onPickClass }) {
   const settings = useContext(SettingsContext);
   const [selectedDate, setSelectedDate] = useState(() => new Date());
   const [monthCursor, setMonthCursor] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
@@ -434,6 +434,10 @@ function HorarioTab({ bookings, schedule, holidays, onPickClass }) {
         const cap = c.capacity || settings.defaultCapacity;
         const attendees = bookings.filter(b => b.date === dateIso && b.time === c.time && b.className === c.name && occupiesSpot(b.status)).length;
         const full = attendees >= cap;
+        const isMyBooking = me && bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === c.time && b.className === c.name && b.status !== 'cancelada');
+        const bookedOtherThatDay = !isMyBooking && me && bookings.some(b => b.studentId === me.id && b.date === dateIso && b.status !== 'cancelada');
+        const pillLabel = isMyBooking ? 'Reservada' : full ? 'Completo' : bookedOtherThatDay ? 'No disponible' : 'Reservar';
+        const pillClass = isMyBooking ? 'pill-sage' : (full || bookedOtherThatDay) ? 'pill-gray' : (CLASS_STYLE[c.name] || 'pill-lav');
         return (
           <div className="classcard" key={idx} onClick={() => onPickClass(c, dateIso, dayName)}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
@@ -442,7 +446,7 @@ function HorarioTab({ bookings, schedule, holidays, onPickClass }) {
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span className="muted" style={{ fontSize: 12 }}>{attendees}/{cap}</span>
-              <span className={`pill ${full ? 'pill-gray' : (CLASS_STYLE[c.name] || 'pill-lav')}`}>{full ? 'Completo' : 'Reservar'}</span>
+              <span className={`pill ${pillClass}`}>{pillLabel}</span>
             </div>
           </div>
         );
