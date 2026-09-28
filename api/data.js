@@ -72,6 +72,22 @@ function classCapacityFor(schedule, item) {
   return (slot && slot.capacity) || CLASS_CAPACITY;
 }
 
+// El servidor de Vercel corre en UTC, así que comparar Date directamente
+// desplazaría la hora respecto a España. En vez de eso, comparamos como
+// cadenas 'YYYY-MM-DDTHH:mm' en la hora local de Madrid (incluye el cambio
+// de horario de verano/invierno automáticamente).
+function madridNowString() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Madrid', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false
+  }).formatToParts(new Date());
+  const get = (t) => parts.find(p => p.type === t).value;
+  return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}`;
+}
+
+function isPastSlot(item) {
+  return `${item.date}T${item.time}` < madridNowString();
+}
+
 function isBookingChangeAllowed(diff, current, schedule, holidays) {
   if (!diff) return false;
   if (diff.type === 'noop') return true;
@@ -99,6 +115,10 @@ function isBookingChangeAllowed(diff, current, schedule, holidays) {
 
   // Día marcado como festivo por Beatriz: no se admiten reservas nuevas.
   if ((holidays || []).some(h => h.date === item.date)) return false;
+
+  // No se puede reservar (ni apuntarse a la lista de espera de) una clase
+  // cuya fecha/hora ya ha pasado.
+  if (isPastSlot(item)) return false;
 
   const cur = Array.isArray(current) ? current : [];
 

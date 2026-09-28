@@ -96,6 +96,9 @@ function slotDuration(c) { return c.duration || 60; }
 const STATUS_LABELS = { confirmada: 'Confirmada', pendiente_pago: 'Pendiente de pago', cancelada: 'Cancelada', en_espera: 'En lista de espera' };
 const RECURRING_WEEKS = 10; // nº de semanas que se crean de golpe al añadir una alumna "fija"
 function isHoliday(holidays, dateIso) { return (holidays || []).find(h => h.date === dateIso); }
+// Usa la hora local del dispositivo (la de la propia alumna), que para este
+// uso es más fiable que calcularlo en el servidor con otro huso horario.
+function isPastSlot(dateIso, time) { return new Date(`${dateIso}T${time}`).getTime() < Date.now(); }
 
 // Cancelar con menos de estas horas de antelación no devuelve la clase al bono.
 const LATE_CANCEL_HOURS = 3;
@@ -435,8 +438,9 @@ function HorarioTab({ bookings, schedule, holidays, me, onPickClass }) {
         const attendees = bookings.filter(b => b.date === dateIso && b.time === c.time && b.className === c.name && occupiesSpot(b.status)).length;
         const full = attendees >= cap;
         const isMyBooking = me && bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === c.time && b.className === c.name && occupiesSpot(b.status));
-        const pillLabel = isMyBooking ? 'Reservada' : full ? 'Completo' : 'Reservar';
-        const pillClass = isMyBooking ? 'pill-sage' : full ? 'pill-gray' : (CLASS_STYLE[c.name] || 'pill-lav');
+        const past = isPastSlot(dateIso, c.time);
+        const pillLabel = isMyBooking ? 'Reservada' : full ? 'Completo' : past ? 'Finalizada' : 'Reservar';
+        const pillClass = isMyBooking ? 'pill-sage' : (full || past) ? 'pill-gray' : (CLASS_STYLE[c.name] || 'pill-lav');
         return (
           <div className="classcard" key={idx} onClick={() => onPickClass(c, dateIso, dayName)}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
@@ -1994,8 +1998,14 @@ function AdminEncuestas({ polls, savePolls, students, adminToken, toast }) {
 function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases, bonos, me, pickProfile, activePurchaseFor, toast, onClose }) {
   const settings = useContext(SettingsContext);
   const { day, cls, dateIso } = modal;
+  // Evita reservas/pagos duplicados por doble tap o doble clic: el estado de
+  // React no llega a tiempo de deshabilitar el botón entre los dos clics, así
+  // que se corta aquí, de forma síncrona, antes de crear nada.
+  const submittingRef = useRef(false);
 
   function confirmBookingWithBono(purchaseId) {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     const next = purchases.map(p => p.id === purchaseId ? { ...p, classesUsed: (p.classesUsed || 0) + (p.classesTotal === null ? 0 : 1) } : p);
     savePurchases(next);
     saveBookings([...bookings, { id: uid(), studentId: me.id, day, time: cls.time, className: cls.name, date: dateIso, status: 'confirmada', paymentMethod: 'bono', purchaseId, createdAt: new Date().toISOString() }]);
@@ -2003,6 +2013,8 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
     onClose();
   }
   function confirmBookingSuelta(studentId) {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     const booking = { id: uid(), studentId, day, time: cls.time, className: cls.name, date: dateIso, status: 'pendiente_pago', paymentMethod: 'bizum', price: settings.claseSueltaPrice, createdAt: new Date().toISOString() };
     saveBookings([...bookings, booking]);
     toast(`Reserva registrada. Haz el Bizum al ${settings.bizumPhone} y Beatriz lo confirmará`);
@@ -2010,15 +2022,20 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
     return booking;
   }
   async function confirmBookingSueltaCard(studentId) {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     const booking = { id: uid(), studentId, day, time: cls.time, className: cls.name, date: dateIso, status: 'pendiente_pago', paymentMethod: 'redsys', price: settings.claseSueltaPrice, createdAt: new Date().toISOString() };
     saveBookings([...bookings, booking]);
     try {
       await payWithRedsys({ kind: 'suelta', itemId: booking.id, studentId, amount: settings.claseSueltaPrice, concept: `${cls.name} (${day} ${cls.time})` });
     } catch (e) {
+      submittingRef.current = false;
       toast('No se pudo iniciar el pago con tarjeta. Puedes pagar por Bizum.');
     }
   }
   function joinWaitlist() {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     const booking = { id: uid(), studentId: me.id, day, time: cls.time, className: cls.name, date: dateIso, status: 'en_espera', createdAt: new Date().toISOString() };
     saveBookings([...bookings, booking]);
     toast('Apuntada a la lista de espera. Te avisaremos por email y notificación si se libera una plaza.');
@@ -2031,10 +2048,13 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
   let step2 = null;
   if (dateIso) {
     const full = attendeeCount >= capacity;
+    const past = isPastSlot(dateIso, cls.time);
     if (me) {
       const already = bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === cls.time && b.className === cls.name && occupiesSpot(b.status));
       if (already) {
         step2 = <p className="muted" style={{ marginTop: 12 }}>Ya tienes esta clase reservada ese día.</p>;
+      } else if (past) {
+        step2 = <p className="muted" style={{ marginTop: 12 }}>Esta clase ya ha pasado. Elige otra fecha u hora.</p>;
       } else if (full) {
         const onWaitlist = bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === cls.time && b.className === cls.name && b.status === 'en_espera');
         step2 = onWaitlist ? (
@@ -2070,6 +2090,13 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
           </>
         );
       }
+    } else if (past) {
+      step2 = (
+        <>
+          <hr className="sep" />
+          <p className="muted">Esta clase ya ha pasado. Elige otra fecha u hora.</p>
+        </>
+      );
     } else if (full) {
       step2 = (
         <>
@@ -2180,8 +2207,14 @@ function BonoModal({ modal, me, purchases, savePurchases, toast, onClose }) {
   const termDays = trimestre ? 90 : 30;
   const label = trimestre ? `${b.name} · Trimestre` : b.name;
   const [paying, setPaying] = useState(false);
+  // Doble protección frente a duplicados: el ref corta un doble tap/clic
+  // síncrono, y reutilizar una solicitud pendiente ya existente evita crear
+  // otra si vuelve a intentarlo tras cerrar y reabrir (p.ej. pago abandonado).
+  const submittingRef = useRef(false);
 
   function createPendingPurchase(paymentMethod) {
+    const existing = purchases.find(p => p.studentId === me.id && p.bonoId === b.id && p.trimestre === trimestre && p.status === 'pendiente');
+    if (existing) return existing;
     const purchase = {
       id: uid(), studentId: me.id, bonoId: b.id, price, trimestre,
       classesTotal, classesUsed: 0,
@@ -2192,14 +2225,24 @@ function BonoModal({ modal, me, purchases, savePurchases, toast, onClose }) {
   }
 
   async function handleCardPayment() {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setPaying(true);
     const purchase = createPendingPurchase('redsys');
     try {
       await payWithRedsys({ kind: 'bono', itemId: purchase.id, studentId: me.id, amount: price, concept: label });
     } catch (e) {
+      submittingRef.current = false;
       setPaying(false);
       toast('No se pudo iniciar el pago con tarjeta. Puedes pagar por Bizum.');
     }
+  }
+  function handleBizum() {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    createPendingPurchase('bizum');
+    toast(`Bono solicitado. Haz el Bizum al ${settings.bizumPhone} y Beatriz lo confirmará`);
+    onClose();
   }
 
   return (
@@ -2212,11 +2255,7 @@ function BonoModal({ modal, me, purchases, savePurchases, toast, onClose }) {
           {paying ? 'Redirigiendo a la pasarela…' : 'Pagar con tarjeta ahora'}
         </button>
         <p className="muted" style={{ textAlign: 'center', margin: '10px 0' }}>o</p>
-        <button className="btn btn-ghost" onClick={() => {
-          createPendingPurchase('bizum');
-          toast(`Bono solicitado. Haz el Bizum al ${settings.bizumPhone} y Beatriz lo confirmará`);
-          onClose();
-        }}>Pagar por Bizum al {settings.bizumPhone}</button>
+        <button className="btn btn-ghost" disabled={paying} onClick={handleBizum}>Pagar por Bizum al {settings.bizumPhone}</button>
       </div>
     </div>
   );
