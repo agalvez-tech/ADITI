@@ -149,6 +149,7 @@ export default function App() {
   const [polls, setPolls] = useState([]);
   const [holidays, setHolidays] = useState([]);
   const [events, setEvents] = useState([]);
+  const [scheduledPosts, setScheduledPosts] = useState([]);
   const [schedule, setSchedule] = useState(DEFAULT_SCHEDULE);
   const [bonos, setBonos] = useState(DEFAULT_BONOS);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -170,11 +171,13 @@ export default function App() {
     function loadAll() {
       return Promise.all([
         isAdmin ? getData('students', adminToken) : Promise.resolve(null),
+        isAdmin ? getData('scheduledPosts', adminToken) : Promise.resolve(null),
         getData('bookings'), getData('purchases'), getData('wallPosts'), getData('polls'),
         getData('schedule'), getData('bonos'), getData('settings'), getData('holidays'), getData('events')
-      ]).then(([s, b, p, w, pl, sch, bo, cfg, hol, ev]) => {
+      ]).then(([s, sp, b, p, w, pl, sch, bo, cfg, hol, ev]) => {
         if (cancelled) return;
         if (isAdmin) setStudents(s || []);
+        if (isAdmin) setScheduledPosts(sp || []);
         setBookings(b || []);
         setPurchases(p || []);
         setWallPosts(w || []);
@@ -216,6 +219,7 @@ export default function App() {
   function savePolls(next) { setPolls(next); setData('polls', next, adminToken); }
   function saveHolidays(next) { setHolidays(next); setData('holidays', next, adminToken); }
   function saveEvents(next) { setEvents(next); setData('events', next, adminToken); }
+  function saveScheduledPosts(next) { setScheduledPosts(next); setData('scheduledPosts', next, adminToken); }
   function saveSchedule(next) { setSchedule(next); setData('schedule', next, adminToken); }
   function saveBonos(next) { setBonos(next); setData('bonos', next, adminToken); }
   function saveSettings(next) { setSettings(next); setData('settings', next, adminToken); }
@@ -278,6 +282,7 @@ export default function App() {
             students={students} saveStudents={saveStudents} bookings={bookings} purchases={purchases} wallPosts={wallPosts}
             polls={polls} savePolls={savePolls} holidays={holidays} saveHolidays={saveHolidays}
             events={events} saveEvents={saveEvents}
+            scheduledPosts={scheduledPosts} saveScheduledPosts={saveScheduledPosts}
             activePurchaseFor={activePurchaseFor} adminToken={adminToken}
             schedule={schedule} saveSchedule={saveSchedule} bonos={bonos} saveBonos={saveBonos}
             settings={settings} saveSettings={saveSettings} onAdminLogout={logoutAdmin}
@@ -1156,7 +1161,7 @@ function AdminEstadisticas({ students, purchases, bookings, bonos }) {
   );
 }
 
-function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, polls, savePolls, holidays, saveHolidays, events, saveEvents, activePurchaseFor, adminToken, schedule, saveSchedule, bonos, saveBonos, settings, saveSettings, onAdminLogout, savePurchases, saveBookings, saveWallPosts, toast }) {
+function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, polls, savePolls, holidays, saveHolidays, events, saveEvents, scheduledPosts, saveScheduledPosts, activePurchaseFor, adminToken, schedule, saveSchedule, bonos, saveBonos, settings, saveSettings, onAdminLogout, savePurchases, saveBookings, saveWallPosts, toast }) {
   const [alumnaSearch, setAlumnaSearch] = useState('');
   const tabs = [
     { id: 'estadisticas', label: 'Estadísticas' },
@@ -1305,7 +1310,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
       )}
       {adminTab === 'horarios' && <AdminHorarios schedule={schedule} saveSchedule={saveSchedule} holidays={holidays} saveHolidays={saveHolidays} toast={toast} />}
       {adminTab === 'gestionbonos' && <AdminBonos bonos={bonos} saveBonos={saveBonos} toast={toast} />}
-      {adminTab === 'muro' && <AdminMuro wallPosts={wallPosts} saveWallPosts={saveWallPosts} adminToken={adminToken} toast={toast} />}
+      {adminTab === 'muro' && <AdminMuro wallPosts={wallPosts} saveWallPosts={saveWallPosts} scheduledPosts={scheduledPosts} saveScheduledPosts={saveScheduledPosts} adminToken={adminToken} toast={toast} />}
       {adminTab === 'encuestas' && <AdminEncuestas polls={polls} savePolls={savePolls} students={students} adminToken={adminToken} toast={toast} />}
       {adminTab === 'eventos' && <AdminEventos events={events} saveEvents={saveEvents} bookings={bookings} students={students} adminToken={adminToken} toast={toast} />}
       {adminTab === 'importar' && <AdminImport students={students} saveStudents={saveStudents} toast={toast} />}
@@ -1842,12 +1847,13 @@ function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, 
   );
 }
 
-function AdminMuro({ wallPosts, saveWallPosts, adminToken, toast }) {
+function AdminMuro({ wallPosts, saveWallPosts, scheduledPosts, saveScheduledPosts, adminToken, toast }) {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [imageUrl, setImageUrl] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [publishAt, setPublishAt] = useState(''); // vacío = publicar ya; si no, valor de datetime-local
 
   async function handleImagePick(e) {
     const file = e.target.files[0];
@@ -1870,6 +1876,38 @@ function AdminMuro({ wallPosts, saveWallPosts, adminToken, toast }) {
     setImagePreview(null);
   }
 
+  function resetForm() {
+    setTitle(''); setContent(''); setImageUrl(null); setImagePreview(null); setPublishAt('');
+  }
+
+  function publish() {
+    if (!title.trim() || !content.trim()) { toast('Escribe un título y un mensaje'); return; }
+    if (publishAt) {
+      const publishDate = new Date(publishAt);
+      if (isNaN(publishDate.getTime()) || publishDate <= new Date()) { toast('Elige una fecha y hora futuras, o déjalo en blanco para publicar ya'); return; }
+      const scheduled = { id: uid(), title: title.trim(), content: content.trim(), imageUrl: imageUrl || null, publishAt: publishDate.toISOString(), createdAt: new Date().toISOString() };
+      saveScheduledPosts([...scheduledPosts, scheduled]);
+      resetForm();
+      toast(`Publicación programada para el ${fmtDate(publishDate)} a las ${publishDate.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}`);
+    } else {
+      saveWallPosts([...wallPosts, { id: uid(), title: title.trim(), content: content.trim(), imageUrl: imageUrl || null, date: new Date().toISOString() }]);
+      resetForm();
+      toast('Publicado en el muro, avisando a las alumnas…');
+      fetch('/api/notify-wall', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: title.trim(), body: content.trim() })
+      }).catch(() => {});
+    }
+  }
+
+  function cancelScheduled(p) {
+    if (!confirm('¿Cancelar esta publicación programada?')) return;
+    if (p.imageUrl) deleteWallImage(p.imageUrl, adminToken);
+    saveScheduledPosts(scheduledPosts.filter(x => x.id !== p.id));
+    toast('Publicación programada cancelada');
+  }
+
   return (
     <>
       <div className="card">
@@ -1887,18 +1925,27 @@ function AdminMuro({ wallPosts, saveWallPosts, adminToken, toast }) {
         ) : (
           <input type="file" accept="image/*" onChange={handleImagePick} />
         )}
-        <button className="btn btn-primary" style={{ marginTop: 14 }} disabled={uploading} onClick={() => {
-          if (!title.trim() || !content.trim()) { toast('Escribe un título y un mensaje'); return; }
-          saveWallPosts([...wallPosts, { id: uid(), title: title.trim(), content: content.trim(), imageUrl: imageUrl || null, date: new Date().toISOString() }]);
-          setTitle(''); setContent(''); setImageUrl(null); setImagePreview(null);
-          toast('Publicado en el muro, avisando a las alumnas…');
-          fetch('/api/notify-wall', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title: title.trim(), body: content.trim() })
-          }).catch(() => {});
-        }}>Publicar en el muro</button>
+        <label>Programar publicación (opcional)</label>
+        <input type="datetime-local" value={publishAt} onChange={e => setPublishAt(e.target.value)} />
+        <p className="muted" style={{ marginTop: 4 }}>{publishAt ? 'Se publicará sola en esa fecha y hora, avisando a las alumnas.' : 'Déjalo en blanco para publicarlo ahora mismo.'}</p>
+        <button className="btn btn-primary" style={{ marginTop: 10 }} disabled={uploading} onClick={publish}>
+          {publishAt ? 'Programar publicación' : 'Publicar en el muro'}
+        </button>
       </div>
+      {scheduledPosts.length > 0 && (
+        <>
+          <div className="sectionlabel">Programadas</div>
+          {[...scheduledPosts].sort((a, b) => new Date(a.publishAt) - new Date(b.publishAt)).map(p => (
+            <div className="card postcard" key={p.id} style={{ borderLeftColor: 'var(--peach)' }}>
+              <div className="postdate">Se publica el {fmtDate(new Date(p.publishAt))} a las {new Date(p.publishAt).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</div>
+              <h3>{p.title}</h3>
+              {p.imageUrl && <img src={p.imageUrl} alt="" className="postimg" />}
+              <p>{p.content}</p>
+              <button className="linklike" style={{ color: 'var(--danger)', marginTop: 8 }} onClick={() => cancelScheduled(p)}>Cancelar programación</button>
+            </div>
+          ))}
+        </>
+      )}
       <div className="sectionlabel">Publicaciones</div>
       {[...wallPosts].sort((a, b) => new Date(b.date) - new Date(a.date)).map(p => (
         <div className="card postcard" key={p.id}>

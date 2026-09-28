@@ -1,23 +1,25 @@
 import { Redis } from '@upstash/redis';
 import { syncStudentContact, notifyBonoConfirmado, notifySueltaConfirmada, broadcastWallPost, broadcastPoll, broadcastHoliday, notifyWaitlistSpotOpen, broadcastEvent } from './_brevo.js';
-import { notifyStudentPush } from './_push.js';
+import { notifyStudentPush, notifyAllPush } from './_push.js';
 
 const redis = Redis.fromEnv();
 
 // Solo se permite leer/escribir estas claves compartidas.
 // Evita que alguien use el endpoint para escribir cualquier cosa en tu Redis.
-const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts', 'schedule', 'bonos', 'settings', 'polls', 'holidays', 'events'];
+const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts', 'schedule', 'bonos', 'settings', 'polls', 'holidays', 'events', 'scheduledPosts'];
 
 // 'students' contiene datos personales de todas las alumnas: ni lectura ni
 // escritura completas sin ser admin (las alumnas usan api/student-profile.js
-// para su propia ficha, así nunca reciben el listado completo).
-const ADMIN_ONLY_READ_KEYS = ['students'];
+// para su propia ficha, así nunca reciben el listado completo). Los
+// borradores de 'scheduledPosts' tampoco se muestran a nadie hasta que se
+// publican de verdad (pasan a 'wallPosts').
+const ADMIN_ONLY_READ_KEYS = ['students', 'scheduledPosts'];
 
 // 'wallPosts' (el Muro), 'schedule' (horarios), 'bonos', 'settings',
 // 'holidays' (días festivos) y 'events' (eventos especiales, solo la ficha
 // del evento en sí: apuntarse a uno crea una reserva normal en 'bookings')
 // los lee cualquier alumna, pero solo Beatriz los edita.
-const ADMIN_ONLY_WRITE_KEYS = ['students', 'wallPosts', 'schedule', 'bonos', 'settings', 'holidays', 'events'];
+const ADMIN_ONLY_WRITE_KEYS = ['students', 'wallPosts', 'schedule', 'bonos', 'settings', 'holidays', 'events', 'scheduledPosts'];
 
 // Para 'bookings' y 'purchases', las alumnas sí necesitan poder crear su propia
 // reserva/compra sin ser admin. Sin token, solo se permite un cambio mínimo y
@@ -297,6 +299,41 @@ async function runBrevoSideEffects(key, value, diff, appBaseUrl) {
   }
 }
 
+// No hay ningún proceso en segundo plano corriendo solo: esto se llama cada
+// vez que alguien (cualquier alumna o Beatriz) pide el Muro, que ocurre cada
+// pocos segundos mientras la app está abierta en algún sitio. Si toca
+// publicar algo programado, lo pasa a 'wallPosts' y avisa exactamente igual
+// que una publicación manual. Un bloqueo corto evita que dos peticiones
+// que lleguen a la vez lo dupliquen.
+async function publishDueScheduledPosts() {
+  try {
+    const scheduled = (await redis.get('scheduledPosts')) || [];
+    const now = new Date();
+    if (!scheduled.some(p => new Date(p.publishAt) <= now)) return;
+
+    const gotLock = await redis.set('scheduledPostsLock', '1', { nx: true, ex: 10 });
+    if (!gotLock) return; // otra petición concurrente ya se está encargando
+
+    const fresh = (await redis.get('scheduledPosts')) || [];
+    const due = fresh.filter(p => new Date(p.publishAt) <= now);
+    if (due.length === 0) return;
+    const remaining = fresh.filter(p => new Date(p.publishAt) > now);
+
+    const wallPosts = (await redis.get('wallPosts')) || [];
+    const newPosts = due.map(p => ({ id: p.id, title: p.title, content: p.content, imageUrl: p.imageUrl, date: p.publishAt }));
+    await redis.set('wallPosts', [...wallPosts, ...newPosts]);
+    await redis.set('scheduledPosts', remaining);
+
+    const students = (await redis.get('students')) || [];
+    for (const p of newPosts) {
+      await broadcastWallPost(students, p.title, p.content, p.imageUrl);
+      await notifyAllPush(p.title, p.content);
+    }
+  } catch (e) {
+    console.error('Publicaciones programadas: error publicando', e);
+  }
+}
+
 export default async function handler(req, res) {
   const key = req.query.key;
 
@@ -311,6 +348,7 @@ export default async function handler(req, res) {
       return res.status(401).json({ error: 'Requiere acceso de administración' });
     }
     try {
+      if (key === 'wallPosts') await publishDueScheduledPosts();
       const value = await redis.get(key);
       return res.status(200).json({ value: value ?? null });
     } catch (e) {

@@ -29,3 +29,27 @@ export async function notifyStudentPush(studentId, title, body) {
     console.error('Push: error avisando a alumna', e);
   }
 }
+
+// Avisa a TODAS las suscripciones guardadas (equivalente a lo que hace
+// /api/notify-wall). Se usa desde el propio servidor para publicaciones
+// programadas, que no pasan por ese endpoint porque nadie hace la petición.
+export async function notifyAllPush(title, body) {
+  if (!process.env.VAPID_PUBLIC_KEY) return;
+  ensureConfigured();
+  try {
+    const subs = (await redis.get('pushSubscriptions')) || [];
+    const payload = JSON.stringify({ title: `Áditi: ${title}`, body: body || '', url: '/' });
+    const stillValid = [];
+    await Promise.all(subs.map(async (entry) => {
+      try {
+        await webpush.sendNotification(entry.subscription, payload);
+        stillValid.push(entry);
+      } catch (e) {
+        if (e.statusCode !== 404 && e.statusCode !== 410) stillValid.push(entry);
+      }
+    }));
+    if (stillValid.length !== subs.length) await redis.set('pushSubscriptions', stillValid);
+  } catch (e) {
+    console.error('Push: error en aviso general', e);
+  }
+}
