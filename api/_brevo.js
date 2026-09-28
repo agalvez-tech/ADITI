@@ -143,6 +143,25 @@ export async function broadcastHoliday(students, holiday) {
   );
 }
 
+// Avisa a las alumnas cuando Beatriz publica un evento especial nuevo
+// (taller, sesión puntual...). Solo informa; para apuntarse hay que entrar
+// en la app, donde también se paga.
+export async function broadcastEvent(students, event) {
+  if (!enabled() || !event) return;
+  const dateStr = new Date(`${event.date}T12:00:00`).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
+  const dateCap = dateStr.charAt(0).toUpperCase() + dateStr.slice(1);
+  const emails = (students || []).map(s => s.email).filter(Boolean);
+  const imageHtml = event.imageUrl ? `<p><img src="${event.imageUrl}" alt="" style="max-width:100%;border-radius:8px;"></p>` : '';
+  const html = `${imageHtml}<p>Nuevo evento especial: <b>${event.name}</b></p>
+    <p>${dateCap} a las ${event.time} · ${event.price}€</p>
+    ${event.description ? `<p>${event.description}</p>` : ''}
+    <p>Entra en la app para apuntarte y pagar tu plaza — son limitadas.</p>
+    <p>— Aditi Functional Yoga</p>`;
+  await Promise.allSettled(
+    emails.map(email => sendEmail(email, `Aditi: nuevo evento — ${event.name}`, html))
+  );
+}
+
 // Manda la encuesta a cada alumna con un botón por opción para poder votar
 // con un solo clic desde el propio email, sin tener que abrir la app.
 // Cada enlace lleva su id de alumna incrustado para que el voto quede ligado

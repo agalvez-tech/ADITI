@@ -1,21 +1,23 @@
 import { Redis } from '@upstash/redis';
-import { syncStudentContact, notifyBonoConfirmado, notifySueltaConfirmada, broadcastWallPost, broadcastPoll, broadcastHoliday, notifyWaitlistSpotOpen } from './_brevo.js';
+import { syncStudentContact, notifyBonoConfirmado, notifySueltaConfirmada, broadcastWallPost, broadcastPoll, broadcastHoliday, notifyWaitlistSpotOpen, broadcastEvent } from './_brevo.js';
 import { notifyStudentPush } from './_push.js';
 
 const redis = Redis.fromEnv();
 
 // Solo se permite leer/escribir estas claves compartidas.
 // Evita que alguien use el endpoint para escribir cualquier cosa en tu Redis.
-const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts', 'schedule', 'bonos', 'settings', 'polls', 'holidays'];
+const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts', 'schedule', 'bonos', 'settings', 'polls', 'holidays', 'events'];
 
 // 'students' contiene datos personales de todas las alumnas: ni lectura ni
 // escritura completas sin ser admin (las alumnas usan api/student-profile.js
 // para su propia ficha, así nunca reciben el listado completo).
 const ADMIN_ONLY_READ_KEYS = ['students'];
 
-// 'wallPosts' (el Muro), 'schedule' (horarios), 'bonos', 'settings' y
-// 'holidays' (días festivos) los lee cualquier alumna, pero solo Beatriz los edita.
-const ADMIN_ONLY_WRITE_KEYS = ['students', 'wallPosts', 'schedule', 'bonos', 'settings', 'holidays'];
+// 'wallPosts' (el Muro), 'schedule' (horarios), 'bonos', 'settings',
+// 'holidays' (días festivos) y 'events' (eventos especiales, solo la ficha
+// del evento en sí: apuntarse a uno crea una reserva normal en 'bookings')
+// los lee cualquier alumna, pero solo Beatriz los edita.
+const ADMIN_ONLY_WRITE_KEYS = ['students', 'wallPosts', 'schedule', 'bonos', 'settings', 'holidays', 'events'];
 
 // Para 'bookings' y 'purchases', las alumnas sí necesitan poder crear su propia
 // reserva/compra sin ser admin. Sin token, solo se permite un cambio mínimo y
@@ -64,7 +66,13 @@ function diffSingleChange(current, next) {
 const CLASS_CAPACITY = 8;
 const DAY_INDEX_SERVER = { 0: 'Domingo', 1: 'Lunes', 2: 'Martes', 3: 'Miércoles', 4: 'Jueves', 5: 'Viernes', 6: 'Sábado' };
 
-function classCapacityFor(schedule, item) {
+function eventFor(events, item) {
+  return (events || []).find(e => e.date === item.date && e.time === item.time && e.name === item.className);
+}
+
+function classCapacityFor(schedule, item, events) {
+  const ev = eventFor(events, item);
+  if (ev) return ev.capacity || CLASS_CAPACITY;
   if (!schedule || !item?.date) return CLASS_CAPACITY;
   const dow = new Date(`${item.date}T12:00:00`).getDay();
   const slots = schedule[DAY_INDEX_SERVER[dow]] || [];
@@ -88,7 +96,7 @@ function isPastSlot(item) {
   return `${item.date}T${item.time}` < madridNowString();
 }
 
-function isBookingChangeAllowed(diff, current, schedule, holidays) {
+function isBookingChangeAllowed(diff, current, schedule, holidays, events) {
   if (!diff) return false;
   if (diff.type === 'noop') return true;
 
@@ -113,8 +121,11 @@ function isBookingChangeAllowed(diff, current, schedule, holidays) {
   const validNew = item.status === 'pendiente_pago' || (item.status === 'confirmada' && item.paymentMethod === 'bono') || item.status === 'en_espera';
   if (!validNew) return false;
 
-  // Día marcado como festivo por Beatriz: no se admiten reservas nuevas.
-  if ((holidays || []).some(h => h.date === item.date)) return false;
+  // Día marcado como festivo por Beatriz: no se admiten reservas nuevas,
+  // salvo que sea precisamente un evento especial programado ese mismo día
+  // (Beatriz lo ha creado a propósito para esa fecha).
+  const ev = eventFor(events, item);
+  if (!ev && (holidays || []).some(h => h.date === item.date)) return false;
 
   // No se puede reservar (ni apuntarse a la lista de espera de) una clase
   // cuya fecha/hora ya ha pasado.
@@ -126,7 +137,7 @@ function isBookingChangeAllowed(diff, current, schedule, holidays) {
   const occupied = cur
     .filter(b => b.date === item.date && b.time === item.time && b.className === item.className && b.status !== 'cancelada' && b.status !== 'en_espera')
     .length;
-  const capacity = classCapacityFor(schedule, item);
+  const capacity = classCapacityFor(schedule, item, events);
 
   if (item.status === 'en_espera') {
     // Solo tiene sentido apuntarse a la lista de espera si la clase está
@@ -279,6 +290,11 @@ async function runBrevoSideEffects(key, value, diff, appBaseUrl) {
     await broadcastHoliday(students, diff.item);
     return;
   }
+  if (key === 'events' && diff?.type === 'append') {
+    const students = (await redis.get('students')) || [];
+    await broadcastEvent(students, diff.item);
+    return;
+  }
 }
 
 export default async function handler(req, res) {
@@ -308,7 +324,7 @@ export default async function handler(req, res) {
     }
     try {
       const { value } = req.body || {};
-      const needsDiff = key === 'bookings' || key === 'purchases' || key === 'wallPosts' || key === 'polls' || key === 'holidays';
+      const needsDiff = key === 'bookings' || key === 'purchases' || key === 'wallPosts' || key === 'polls' || key === 'holidays' || key === 'events';
       const current = needsDiff ? await redis.get(key) : undefined;
       const diff = needsDiff ? diffSingleChange(current, value) : null;
 
@@ -317,7 +333,8 @@ export default async function handler(req, res) {
         if (key === 'bookings') {
           const schedule = await redis.get('schedule');
           const holidays = await redis.get('holidays');
-          allowed = isBookingChangeAllowed(diff, current, schedule, holidays);
+          const events = await redis.get('events');
+          allowed = isBookingChangeAllowed(diff, current, schedule, holidays, events);
         } else if (key === 'purchases') {
           allowed = isPurchaseChangeAllowed(diff);
         } else {

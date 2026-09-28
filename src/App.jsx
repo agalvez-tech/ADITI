@@ -122,10 +122,13 @@ function findBonoPurchaseForBooking(b, purchases) {
 
 // Cancela una reserva. Si se pagó con bono y se cancela con menos de
 // LATE_CANCEL_HOURS de antelación, la clase se queda descontada del bono
-// (penalización); con más antelación, se le devuelve la clase al bono.
+// (penalización); con más antelación, se le devuelve la clase al bono. La
+// penalización es solo para cuando cancela la propia alumna: si cancela
+// Beatriz (forceRefund) siempre se devuelve la clase, sea cual sea la
+// antelación, porque la responsable de la cancelación no es la alumna.
 // Devuelve true si ha sido una cancelación tardía (para avisar al usuario).
-function cancelBookingAndRefund(b, bookings, saveBookings, purchases, savePurchases) {
-  const late = isLateCancel(b);
+function cancelBookingAndRefund(b, bookings, saveBookings, purchases, savePurchases, { forceRefund } = {}) {
+  const late = !forceRefund && isLateCancel(b);
   saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'cancelada' } : x));
   if (!late && b.paymentMethod === 'bono' && purchases && savePurchases) {
     const purchase = findBonoPurchaseForBooking(b, purchases);
@@ -145,6 +148,7 @@ export default function App() {
   const [wallPosts, setWallPosts] = useState([]);
   const [polls, setPolls] = useState([]);
   const [holidays, setHolidays] = useState([]);
+  const [events, setEvents] = useState([]);
   const [schedule, setSchedule] = useState(DEFAULT_SCHEDULE);
   const [bonos, setBonos] = useState(DEFAULT_BONOS);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -167,8 +171,8 @@ export default function App() {
       return Promise.all([
         isAdmin ? getData('students', adminToken) : Promise.resolve(null),
         getData('bookings'), getData('purchases'), getData('wallPosts'), getData('polls'),
-        getData('schedule'), getData('bonos'), getData('settings'), getData('holidays')
-      ]).then(([s, b, p, w, pl, sch, bo, cfg, hol]) => {
+        getData('schedule'), getData('bonos'), getData('settings'), getData('holidays'), getData('events')
+      ]).then(([s, b, p, w, pl, sch, bo, cfg, hol, ev]) => {
         if (cancelled) return;
         if (isAdmin) setStudents(s || []);
         setBookings(b || []);
@@ -176,6 +180,7 @@ export default function App() {
         setWallPosts(w || []);
         setPolls(pl || []);
         setHolidays(hol || []);
+        setEvents(ev || []);
         if (sch) setSchedule(sch);
         if (bo) setBonos(bo);
         if (cfg) setSettings({ ...DEFAULT_SETTINGS, ...cfg });
@@ -210,6 +215,7 @@ export default function App() {
   function saveWallPosts(next) { setWallPosts(next); setData('wallPosts', next, adminToken); }
   function savePolls(next) { setPolls(next); setData('polls', next, adminToken); }
   function saveHolidays(next) { setHolidays(next); setData('holidays', next, adminToken); }
+  function saveEvents(next) { setEvents(next); setData('events', next, adminToken); }
   function saveSchedule(next) { setSchedule(next); setData('schedule', next, adminToken); }
   function saveBonos(next) { setBonos(next); setData('bonos', next, adminToken); }
   function saveSettings(next) { setSettings(next); setData('settings', next, adminToken); }
@@ -254,9 +260,14 @@ export default function App() {
           />
         ) : tab === 'bonos' ? (
           <BonosTab me={me} activePurchaseFor={activePurchaseFor} purchases={purchases} bonos={bonos}
+            events={events} bookings={bookings}
             onRequestBono={(bono, trimestre) => {
               if (!me) { toast('Completa tu perfil antes de solicitar un bono'); setTab('perfil'); return; }
               setModal({ type: 'bono', bono, trimestre });
+            }}
+            onRequestEvent={(event) => {
+              if (!me) { toast('Completa tu perfil antes de apuntarte'); setTab('perfil'); return; }
+              setModal({ type: 'event', event });
             }} />
         ) : tab === 'perfil' ? (
           <PerfilTab me={me} pickProfile={pickProfile} clearProfile={clearProfile} bonos={bonos}
@@ -266,6 +277,7 @@ export default function App() {
           <AdminTab adminTab={adminTab} setAdminTab={setAdminTab}
             students={students} saveStudents={saveStudents} bookings={bookings} purchases={purchases} wallPosts={wallPosts}
             polls={polls} savePolls={savePolls} holidays={holidays} saveHolidays={saveHolidays}
+            events={events} saveEvents={saveEvents}
             activePurchaseFor={activePurchaseFor} adminToken={adminToken}
             schedule={schedule} saveSchedule={saveSchedule} bonos={bonos} saveBonos={saveBonos}
             settings={settings} saveSettings={saveSettings} onAdminLogout={logoutAdmin}
@@ -288,6 +300,10 @@ export default function App() {
       )}
       {modal && modal.type === 'bono' && (
         <BonoModal modal={modal} me={me} purchases={purchases} savePurchases={savePurchases}
+          toast={toast} onClose={() => setModal(null)} />
+      )}
+      {modal && modal.type === 'event' && (
+        <EventModal modal={modal} me={me} bookings={bookings} saveBookings={saveBookings}
           toast={toast} onClose={() => setModal(null)} />
       )}
     </div>
@@ -498,12 +514,44 @@ function MiniMonthCalendar({ monthCursor, setMonthCursor, selectedDate, onPickDa
 }
 
 /* ---------------- BONOS ---------------- */
-function BonosTab({ me, activePurchaseFor, purchases, bonos, onRequestBono }) {
+function BonosTab({ me, activePurchaseFor, purchases, bonos, events, bookings, onRequestBono, onRequestEvent }) {
   const settings = useContext(SettingsContext);
   const active = me ? activePurchaseFor(me.id) : null;
   const pendiente = me ? purchases.filter(p => p.studentId === me.id && p.status === 'pendiente').sort((a, b) => new Date(b.purchaseDate) - new Date(a.purchaseDate))[0] : null;
+  const upcomingEvents = [...(events || [])]
+    .filter(e => e.active !== false && !isPastSlot(e.date, e.time))
+    .sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`));
   return (
     <>
+      {upcomingEvents.length > 0 && (
+        <>
+          <div className="sectionlabel">Eventos especiales</div>
+          {upcomingEvents.map(ev => {
+            const cap = ev.capacity || settings.defaultCapacity;
+            const attendees = (bookings || []).filter(b => b.date === ev.date && b.time === ev.time && b.className === ev.name && occupiesSpot(b.status)).length;
+            const full = attendees >= cap;
+            const already = me && (bookings || []).some(b => b.studentId === me.id && b.date === ev.date && b.time === ev.time && b.className === ev.name && occupiesSpot(b.status));
+            return (
+              <div className="card" key={ev.id} onClick={() => onRequestEvent(ev)} style={{ cursor: 'pointer' }}>
+                {ev.imageUrl && <img src={ev.imageUrl} alt="" className="postimg" style={{ marginBottom: 8 }} />}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <h3>{ev.name}</h3>
+                    <p className="muted">{fmtDate(new Date(`${ev.date}T12:00:00`))} · {ev.time}</p>
+                    {ev.description && <p className="muted">{ev.description}</p>}
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div className="serif" style={{ fontSize: 17, fontWeight: 600, color: 'var(--plum)' }}>{ev.price}€</div>
+                    <span className={`pill ${already ? 'pill-sage' : full ? 'pill-gray' : 'pill-lav'}`} style={{ marginTop: 6, display: 'inline-block' }}>
+                      {already ? 'Ya apuntada' : full ? 'Completo' : 'Apuntarme'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </>
+      )}
       {!me ? (
         <div className="card" style={{ background: 'var(--lav-pale)', borderColor: 'var(--lav)' }}>
           <h3 style={{ color: 'var(--plum-2)' }}>Consulta libre</h3>
@@ -966,13 +1014,11 @@ function AdminReservaEditRow({ b, bookings, saveBookings, purchases, savePurchas
   const [className, setClassName] = useState(b.className);
 
   function cancelBooking() {
-    const atRisk = b.paymentMethod === 'bono' && isLateCancel(b);
-    const msg = atRisk
-      ? `¿Cancelar esta reserva (${b.className}, ${fmtDate(new Date(b.date))})?\n\nComo faltan menos de ${LATE_CANCEL_HOURS} horas, se descontará igualmente del bono.`
-      : `¿Cancelar esta reserva (${b.className}, ${fmtDate(new Date(b.date))})?`;
-    if (!confirm(msg)) return;
-    const late = cancelBookingAndRefund(b, bookings, saveBookings, purchases, savePurchases);
-    toast(late && b.paymentMethod === 'bono' ? 'Reserva cancelada. Se ha descontado del bono por ser con poca antelación.' : 'Reserva cancelada');
+    if (!confirm(`¿Cancelar esta reserva (${b.className}, ${fmtDate(new Date(b.date))})?`)) return;
+    // Si cancela Beatriz, siempre se devuelve la clase al bono: la
+    // penalización por poca antelación es solo cuando cancela la alumna.
+    cancelBookingAndRefund(b, bookings, saveBookings, purchases, savePurchases, { forceRefund: true });
+    toast(b.paymentMethod === 'bono' ? 'Reserva cancelada y clase devuelta al bono.' : 'Reserva cancelada');
   }
   function markPaid() {
     saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'confirmada' } : x));
@@ -1110,7 +1156,7 @@ function AdminEstadisticas({ students, purchases, bookings, bonos }) {
   );
 }
 
-function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, polls, savePolls, holidays, saveHolidays, activePurchaseFor, adminToken, schedule, saveSchedule, bonos, saveBonos, settings, saveSettings, onAdminLogout, savePurchases, saveBookings, saveWallPosts, toast }) {
+function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, polls, savePolls, holidays, saveHolidays, events, saveEvents, activePurchaseFor, adminToken, schedule, saveSchedule, bonos, saveBonos, settings, saveSettings, onAdminLogout, savePurchases, saveBookings, saveWallPosts, toast }) {
   const [alumnaSearch, setAlumnaSearch] = useState('');
   const tabs = [
     { id: 'estadisticas', label: 'Estadísticas' },
@@ -1122,6 +1168,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
     { id: 'gestionbonos', label: 'Gestionar bonos' },
     { id: 'muro', label: 'Publicar en el muro' },
     { id: 'encuestas', label: 'Encuestas' },
+    { id: 'eventos', label: 'Eventos especiales' },
     { id: 'importar', label: 'Importar alumnas' },
     { id: 'ajustes', label: 'Ajustes' }
   ];
@@ -1136,7 +1183,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
         <AdminEstadisticas students={students} purchases={purchases} bookings={bookings} bonos={bonos} />
       )}
       {adminTab === 'resumen' && (
-        <AdminResumen students={students} bookings={bookings} saveBookings={saveBookings} schedule={schedule} holidays={holidays} toast={toast} />
+        <AdminResumen students={students} bookings={bookings} saveBookings={saveBookings} purchases={purchases} savePurchases={savePurchases} schedule={schedule} holidays={holidays} events={events} toast={toast} />
       )}
       {adminTab === 'alumnas' && (
         <>
@@ -1260,6 +1307,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
       {adminTab === 'gestionbonos' && <AdminBonos bonos={bonos} saveBonos={saveBonos} toast={toast} />}
       {adminTab === 'muro' && <AdminMuro wallPosts={wallPosts} saveWallPosts={saveWallPosts} adminToken={adminToken} toast={toast} />}
       {adminTab === 'encuestas' && <AdminEncuestas polls={polls} savePolls={savePolls} students={students} adminToken={adminToken} toast={toast} />}
+      {adminTab === 'eventos' && <AdminEventos events={events} saveEvents={saveEvents} bookings={bookings} students={students} adminToken={adminToken} toast={toast} />}
       {adminTab === 'importar' && <AdminImport students={students} saveStudents={saveStudents} toast={toast} />}
       {adminTab === 'ajustes' && <AdminAjustes settings={settings} saveSettings={saveSettings} adminToken={adminToken} onAdminLogout={onAdminLogout} toast={toast} />}
     </>
@@ -1476,7 +1524,7 @@ function AdminBonos({ bonos, saveBonos, toast }) {
   );
 }
 
-function AdminResumen({ students, bookings, saveBookings, schedule, holidays, toast }) {
+function AdminResumen({ students, bookings, saveBookings, purchases, savePurchases, schedule, holidays, events, toast }) {
   const settings = useContext(SettingsContext);
   const [offset, setOffset] = useState(0);
   const [creatingExtra, setCreatingExtra] = useState(false);
@@ -1494,6 +1542,12 @@ function AdminResumen({ students, bookings, saveBookings, schedule, holidays, to
   const scheduledKeys = new Set(classes.map(c => `${c.time}|${c.name}`));
   const extraFromBookings = [];
   const seenExtra = new Set();
+  // Los eventos especiales de este día aparecen aquí aunque nadie se haya
+  // apuntado todavía, y con su propio aforo (no el de las clases normales).
+  (events || []).filter(e => e.date === dateIso).forEach(e => {
+    const k = `${e.time}|${e.name}`;
+    if (!scheduledKeys.has(k) && !seenExtra.has(k)) { seenExtra.add(k); extraFromBookings.push({ time: e.time, name: e.name, capacity: e.capacity }); }
+  });
   bookings.filter(b => b.date === dateIso && b.status !== 'cancelada').forEach(b => {
     const k = `${b.time}|${b.className}`;
     if (!scheduledKeys.has(k) && !seenExtra.has(k)) { seenExtra.add(k); extraFromBookings.push({ time: b.time, name: b.className }); }
@@ -1587,7 +1641,7 @@ function AdminResumen({ students, bookings, saveBookings, schedule, holidays, to
           <div className="modal-sheet">
             <button className="modal-close" onClick={() => setSelectedKey(null)}>×</button>
             <AdminResumenClass cls={selectedCls} dateIso={dateIso} students={students} bookings={bookings}
-              saveBookings={saveBookings} toast={toast} />
+              saveBookings={saveBookings} purchases={purchases} savePurchases={savePurchases} toast={toast} />
           </div>
         </div>
       )}
@@ -1612,7 +1666,7 @@ function AdminResumen({ students, bookings, saveBookings, schedule, holidays, to
   );
 }
 
-function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, toast }) {
+function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, purchases, savePurchases, toast }) {
   const settings = useContext(SettingsContext);
   const [adding, setAdding] = useState(false);
   const [addMode, setAddMode] = useState('puntual'); // 'puntual' | 'fija'
@@ -1677,13 +1731,28 @@ function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, 
   }
 
   function cancelOne(b) {
-    saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'cancelada' } : x));
-    toast('Reserva cancelada');
+    // Cancela Beatriz: siempre se devuelve la clase al bono si se pagó con uno.
+    cancelBookingAndRefund(b, bookings, saveBookings, purchases, savePurchases, { forceRefund: true });
+    toast(b.paymentMethod === 'bono' ? 'Reserva cancelada y clase devuelta al bono.' : 'Reserva cancelada');
   }
 
   function cancelSeries(b) {
     if (!confirm('¿Cancelar esta clase y todas las siguientes de esta serie fija?')) return;
-    saveBookings(bookings.map(x => (x.recurrenceId === b.recurrenceId && x.date >= b.date) ? { ...x, status: 'cancelada' } : x));
+    const toCancel = bookings.filter(x => x.recurrenceId === b.recurrenceId && x.date >= b.date && x.status !== 'cancelada');
+    saveBookings(bookings.map(x => toCancel.some(y => y.id === x.id) ? { ...x, status: 'cancelada' } : x));
+    if (purchases && savePurchases) {
+      const bonoBookings = toCancel.filter(x => x.paymentMethod === 'bono');
+      if (bonoBookings.length > 0) {
+        let nextPurchases = purchases;
+        bonoBookings.forEach(x => {
+          const purchase = findBonoPurchaseForBooking(x, nextPurchases);
+          if (purchase) {
+            nextPurchases = nextPurchases.map(p => p.id === purchase.id ? { ...p, classesUsed: Math.max(0, (p.classesUsed || 0) - 1) } : p);
+          }
+        });
+        savePurchases(nextPurchases);
+      }
+    }
     toast('Serie cancelada desde esta fecha');
   }
 
@@ -1994,6 +2063,153 @@ function AdminEncuestas({ polls, savePolls, students, adminToken, toast }) {
   );
 }
 
+function AdminEventos({ events, saveEvents, bookings, students, adminToken, toast }) {
+  const settings = useContext(SettingsContext);
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [date, setDate] = useState('');
+  const [time, setTime] = useState('');
+  const [price, setPrice] = useState('');
+  const [capacity, setCapacity] = useState('');
+  const [imageUrl, setImageUrl] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [uploading, setUploading] = useState(false);
+
+  function resetForm() {
+    setCreating(false);
+    setName(''); setDescription(''); setDate(''); setTime(''); setPrice(''); setCapacity('');
+    setImageUrl(null); setImagePreview(null);
+  }
+
+  async function handleImagePick(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setImagePreview(URL.createObjectURL(file));
+    setUploading(true);
+    try {
+      const url = await uploadWallImage(file);
+      setImageUrl(url);
+    } catch (err) {
+      toast(err.message || 'No se pudo subir la imagen');
+      setImagePreview(null);
+    }
+    setUploading(false);
+  }
+  function removeImage() {
+    if (imageUrl) deleteWallImage(imageUrl, adminToken);
+    setImageUrl(null);
+    setImagePreview(null);
+  }
+
+  function publish() {
+    if (!name.trim() || !date || !time || !price) { toast('Rellena al menos nombre, fecha, hora y precio'); return; }
+    const event = {
+      id: uid(), name: name.trim(), description: description.trim(),
+      date, time, price: Number(price), capacity: capacity.trim() === '' ? settings.defaultCapacity : Number(capacity),
+      imageUrl: imageUrl || null, active: true, createdAt: new Date().toISOString()
+    };
+    saveEvents([...events, event]);
+    resetForm();
+    toast('Evento publicado, avisando a las alumnas…');
+    fetch('/api/notify-wall', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Nuevo evento especial', body: `${event.name} · ${fmtDate(new Date(`${event.date}T12:00:00`))}` })
+    }).catch(() => {});
+  }
+  function toggleActive(ev) {
+    saveEvents(events.map(x => x.id === ev.id ? { ...x, active: x.active === false } : x));
+  }
+  function removeEvent(ev) {
+    if (!confirm(`¿Eliminar el evento "${ev.name}"? Las reservas que ya tenga no se ven afectadas.`)) return;
+    if (ev.imageUrl) deleteWallImage(ev.imageUrl, adminToken);
+    saveEvents(events.filter(x => x.id !== ev.id));
+    toast('Evento eliminado');
+  }
+
+  return (
+    <>
+      <div className="card">
+        {creating ? (
+          <>
+            <label>Nombre del evento</label>
+            <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Ej. Taller de luna llena" />
+            <label>Descripción (opcional)</label>
+            <textarea value={description} onChange={e => setDescription(e.target.value)} placeholder="Cuenta en qué consiste el evento" />
+            <div className="row">
+              <div style={{ flex: 1 }}>
+                <label>Fecha</label>
+                <input type="date" value={date} onChange={e => setDate(e.target.value)} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label>Hora</label>
+                <input type="time" value={time} onChange={e => setTime(e.target.value)} />
+              </div>
+            </div>
+            <div className="row">
+              <div style={{ flex: 1 }}>
+                <label>Precio (€)</label>
+                <input type="number" value={price} onChange={e => setPrice(e.target.value)} placeholder="35" />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label>Aforo</label>
+                <input type="number" min="1" value={capacity} onChange={e => setCapacity(e.target.value)} placeholder={`${settings.defaultCapacity}`} />
+              </div>
+            </div>
+            <label>Foto (opcional)</label>
+            {imagePreview ? (
+              <div style={{ position: 'relative', marginTop: 6 }}>
+                <img src={imagePreview} alt="" className="postimg" style={{ opacity: uploading ? 0.5 : 1 }} />
+                {uploading && <div className="muted" style={{ marginTop: 6 }}>Subiendo imagen…</div>}
+                {!uploading && <button className="linklike" style={{ color: 'var(--danger)', marginTop: 6 }} onClick={removeImage}>Quitar foto</button>}
+              </div>
+            ) : (
+              <input type="file" accept="image/*" onChange={handleImagePick} />
+            )}
+            <div className="row" style={{ marginTop: 12 }}>
+              <button className="btn btn-primary btn-sm" disabled={uploading} onClick={publish}>Publicar evento</button>
+              <button className="linklike" onClick={resetForm}>Cancelar</button>
+            </div>
+          </>
+        ) : (
+          <button className="btn btn-primary" onClick={() => setCreating(true)}>+ Nuevo evento especial</button>
+        )}
+      </div>
+      <div className="sectionlabel">Eventos</div>
+      {events.length === 0 ? <div className="empty">Todavía no has creado ningún evento.</div> :
+        [...events].sort((a, b) => `${b.date}${b.time}`.localeCompare(`${a.date}${a.time}`)).map(ev => {
+          const attendees = bookings.filter(b => b.date === ev.date && b.time === ev.time && b.className === ev.name && occupiesSpot(b.status));
+          const closed = ev.active === false;
+          const past = isPastSlot(ev.date, ev.time);
+          return (
+            <div className="card" key={ev.id}>
+              {ev.imageUrl && <img src={ev.imageUrl} alt="" className="postimg" />}
+              <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <h3 style={{ margin: 0 }}>{ev.name}</h3>
+                  <p className="muted">{fmtDate(new Date(`${ev.date}T12:00:00`))} · {ev.time} · {ev.price}€</p>
+                </div>
+                <span className={`pill ${past ? 'pill-gray' : closed ? 'pill-gray' : 'pill-sage'}`}>{past ? 'Pasado' : closed ? 'Cerrado' : 'Abierto'}</span>
+              </div>
+              {ev.description && <p className="muted">{ev.description}</p>}
+              <p className="muted" style={{ marginTop: 6 }}>{attendees.length}/{ev.capacity || settings.defaultCapacity} apuntadas</p>
+              {attendees.length > 0 && (
+                <p className="muted" style={{ fontSize: 12 }}>
+                  {attendees.map(a => students.find(s => s.id === a.studentId)?.name || 'Alumna eliminada').join(', ')}
+                </p>
+              )}
+              <div className="row" style={{ marginTop: 10 }}>
+                <button className="linklike" onClick={() => toggleActive(ev)}>{closed ? 'Reabrir' : 'Cerrar inscripciones'}</button>
+                <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => removeEvent(ev)}>Eliminar</button>
+              </div>
+            </div>
+          );
+        })}
+    </>
+  );
+}
+
 /* ---------------- MODALES ---------------- */
 function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases, bonos, me, pickProfile, activePurchaseFor, toast, onClose }) {
   const settings = useContext(SettingsContext);
@@ -2256,6 +2472,76 @@ function BonoModal({ modal, me, purchases, savePurchases, toast, onClose }) {
         </button>
         <p className="muted" style={{ textAlign: 'center', margin: '10px 0' }}>o</p>
         <button className="btn btn-ghost" disabled={paying} onClick={handleBizum}>Pagar por Bizum al {settings.bizumPhone}</button>
+      </div>
+    </div>
+  );
+}
+
+function EventModal({ modal, me, bookings, saveBookings, toast, onClose }) {
+  const settings = useContext(SettingsContext);
+  const ev = modal.event;
+  const [paying, setPaying] = useState(false);
+  const submittingRef = useRef(false);
+
+  const capacity = ev.capacity || settings.defaultCapacity;
+  const attendeeCount = bookings.filter(b => b.date === ev.date && b.time === ev.time && b.className === ev.name && occupiesSpot(b.status)).length;
+  const full = attendeeCount >= capacity;
+  const already = bookings.some(b => b.studentId === me.id && b.date === ev.date && b.time === ev.time && b.className === ev.name && occupiesSpot(b.status));
+  const past = isPastSlot(ev.date, ev.time);
+
+  function createBooking(paymentMethod) {
+    const booking = {
+      id: uid(), studentId: me.id, day: dayNameForDate(new Date(`${ev.date}T12:00:00`)), time: ev.time, className: ev.name,
+      date: ev.date, status: 'pendiente_pago', paymentMethod, price: ev.price, eventId: ev.id, createdAt: new Date().toISOString()
+    };
+    saveBookings([...bookings, booking]);
+    return booking;
+  }
+
+  async function handleCardPayment() {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    setPaying(true);
+    const booking = createBooking('redsys');
+    try {
+      await payWithRedsys({ kind: 'suelta', itemId: booking.id, studentId: me.id, amount: ev.price, concept: ev.name });
+    } catch (e) {
+      submittingRef.current = false;
+      setPaying(false);
+      toast('No se pudo iniciar el pago con tarjeta. Puedes pagar por Bizum.');
+    }
+  }
+  function handleBizum() {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    createBooking('bizum');
+    toast(`Apuntada a ${ev.name}. Haz el Bizum al ${settings.bizumPhone} y Beatriz lo confirmará`);
+    onClose();
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal-sheet">
+        <button className="modal-close" onClick={onClose}>×</button>
+        <h3>{ev.name}</h3>
+        <p className="muted">{fmtDate(new Date(`${ev.date}T12:00:00`))} · {ev.time} · <b>{ev.price}€</b></p>
+        {ev.description && <p className="muted">{ev.description}</p>}
+        <hr className="sep" />
+        {already ? (
+          <p className="muted">Ya estás apuntada a este evento.</p>
+        ) : past ? (
+          <p className="muted">Este evento ya ha pasado.</p>
+        ) : full ? (
+          <p className="muted">Este evento ya está completo (máximo {capacity} plazas).</p>
+        ) : (
+          <>
+            <button className="btn btn-primary" disabled={paying} onClick={handleCardPayment}>
+              {paying ? 'Redirigiendo a la pasarela…' : `Pagar con tarjeta ahora · ${ev.price}€`}
+            </button>
+            <p className="muted" style={{ textAlign: 'center', margin: '10px 0' }}>o</p>
+            <button className="btn btn-ghost" disabled={paying} onClick={handleBizum}>Pagar por Bizum al {settings.bizumPhone}</button>
+          </>
+        )}
       </div>
     </div>
   );
