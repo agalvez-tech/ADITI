@@ -6,7 +6,7 @@ const redis = Redis.fromEnv();
 
 // Solo se permite leer/escribir estas claves compartidas.
 // Evita que alguien use el endpoint para escribir cualquier cosa en tu Redis.
-const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts', 'schedule', 'bonos', 'settings', 'polls', 'holidays', 'events', 'scheduledPosts', 'classCancellations'];
+const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts', 'schedule', 'bonos', 'settings', 'polls', 'holidays', 'events', 'scheduledPosts', 'classCancellations', 'punctualClasses'];
 
 // 'students' contiene datos personales de todas las alumnas: ni lectura ni
 // escritura completas sin ser admin (las alumnas usan api/student-profile.js
@@ -19,9 +19,10 @@ const ADMIN_ONLY_READ_KEYS = ['students', 'scheduledPosts'];
 // 'holidays' (días festivos), 'events' (eventos especiales, solo la ficha
 // del evento en sí: apuntarse a uno crea una reserva normal en 'bookings') y
 // 'classCancellations' (cancelaciones puntuales de una clase concreta, un
-// solo día, sin tocar el horario semanal) los lee cualquier alumna, pero
-// solo Beatriz los edita.
-const ADMIN_ONLY_WRITE_KEYS = ['students', 'wallPosts', 'schedule', 'bonos', 'settings', 'holidays', 'events', 'scheduledPosts', 'classCancellations'];
+// solo día, sin tocar el horario semanal) y 'punctualClasses' (clases
+// sueltas añadidas para un único día, sin duplicarse el resto de semanas)
+// los lee cualquier alumna, pero solo Beatriz los edita.
+const ADMIN_ONLY_WRITE_KEYS = ['students', 'wallPosts', 'schedule', 'bonos', 'settings', 'holidays', 'events', 'scheduledPosts', 'classCancellations', 'punctualClasses'];
 
 // Para 'bookings' y 'purchases', las alumnas sí necesitan poder crear su propia
 // reserva/compra sin ser admin. Sin token, solo se permite un cambio mínimo y
@@ -74,9 +75,17 @@ function eventFor(events, item) {
   return (events || []).find(e => e.date === item.date && e.time === item.time && e.name === item.className);
 }
 
-function classCapacityFor(schedule, item, events) {
+// Clase suelta añadida por Beatriz para un único día concreto (no duplicada
+// en el horario semanal del resto de semanas).
+function punctualClassFor(punctualClasses, item) {
+  return (punctualClasses || []).find(p => p.date === item.date && p.time === item.time && p.name === item.className);
+}
+
+function classCapacityFor(schedule, item, events, punctualClasses) {
   const ev = eventFor(events, item);
   if (ev) return ev.capacity || CLASS_CAPACITY;
+  const pc = punctualClassFor(punctualClasses, item);
+  if (pc) return pc.capacity || CLASS_CAPACITY;
   if (!schedule || !item?.date) return CLASS_CAPACITY;
   const dow = new Date(`${item.date}T12:00:00`).getDay();
   const slots = schedule[DAY_INDEX_SERVER[dow]] || [];
@@ -100,7 +109,20 @@ function isPastSlot(item) {
   return `${item.date}T${item.time}` < madridNowString();
 }
 
-function isBookingChangeAllowed(diff, current, schedule, holidays, events, classCancellations) {
+// Las clases del horario semanal solo se pueden reservar con un máximo de
+// 7 días de antelación (si hoy es miércoles, como muy tarde el miércoles
+// siguiente). Los eventos especiales quedan fuera de esta ventana: Beatriz
+// los crea a propósito para que se puedan reservar con más adelanto.
+const BOOKING_WINDOW_DAYS = 7;
+function isTooFarAhead(item) {
+  const todayStr = madridNowString().slice(0, 10);
+  const d = new Date(`${todayStr}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + BOOKING_WINDOW_DAYS);
+  const maxDateStr = d.toISOString().slice(0, 10);
+  return item.date > maxDateStr;
+}
+
+function isBookingChangeAllowed(diff, current, schedule, holidays, events, classCancellations, punctualClasses) {
   if (!diff) return false;
   if (diff.type === 'noop') return true;
 
@@ -139,13 +161,17 @@ function isBookingChangeAllowed(diff, current, schedule, holidays, events, class
   // cuya fecha/hora ya ha pasado.
   if (isPastSlot(item)) return false;
 
+  // Ventana de reserva: como mucho con BOOKING_WINDOW_DAYS días de
+  // antelación (salvo eventos especiales, pensados para abrirse con más adelanto).
+  if (!ev && isTooFarAhead(item)) return false;
+
   const cur = Array.isArray(current) ? current : [];
 
   // 'en_espera' (lista de espera) no ocupa plaza real.
   const occupied = cur
     .filter(b => b.date === item.date && b.time === item.time && b.className === item.className && b.status !== 'cancelada' && b.status !== 'en_espera')
     .length;
-  const capacity = classCapacityFor(schedule, item, events);
+  const capacity = classCapacityFor(schedule, item, events, punctualClasses);
 
   if (item.status === 'en_espera') {
     // Solo tiene sentido apuntarse a la lista de espera si la clase está
@@ -379,7 +405,8 @@ export default async function handler(req, res) {
           const holidays = await redis.get('holidays');
           const events = await redis.get('events');
           const classCancellations = await redis.get('classCancellations');
-          allowed = isBookingChangeAllowed(diff, current, schedule, holidays, events, classCancellations);
+          const punctualClasses = await redis.get('punctualClasses');
+          allowed = isBookingChangeAllowed(diff, current, schedule, holidays, events, classCancellations, punctualClasses);
         } else if (key === 'purchases') {
           allowed = isPurchaseChangeAllowed(diff);
         } else {

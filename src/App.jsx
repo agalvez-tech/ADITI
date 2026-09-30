@@ -103,6 +103,10 @@ function isClassCancelled(classCancellations, dateIso, time, className) {
 // Usa la hora local del dispositivo (la de la propia alumna), que para este
 // uso es más fiable que calcularlo en el servidor con otro huso horario.
 function isPastSlot(dateIso, time) { return new Date(`${dateIso}T${time}`).getTime() < Date.now(); }
+// Las clases del horario solo se pueden reservar con un máximo de 7 días de
+// antelación (si hoy es miércoles, como muy tarde el miércoles siguiente).
+const BOOKING_WINDOW_DAYS = 7;
+function isTooFarAhead(dateIso) { return dateIso > isoDate(addDays(new Date(), BOOKING_WINDOW_DAYS)); }
 
 // Cancelar con menos de estas horas de antelación no devuelve la clase al bono.
 const LATE_CANCEL_HOURS = 3;
@@ -155,6 +159,7 @@ export default function App() {
   const [events, setEvents] = useState([]);
   const [scheduledPosts, setScheduledPosts] = useState([]);
   const [classCancellations, setClassCancellations] = useState([]);
+  const [punctualClasses, setPunctualClasses] = useState([]);
   const [schedule, setSchedule] = useState(DEFAULT_SCHEDULE);
   const [bonos, setBonos] = useState(DEFAULT_BONOS);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -178,8 +183,8 @@ export default function App() {
         isAdmin ? getData('students', adminToken) : Promise.resolve(null),
         isAdmin ? getData('scheduledPosts', adminToken) : Promise.resolve(null),
         getData('bookings'), getData('purchases'), getData('wallPosts'), getData('polls'),
-        getData('schedule'), getData('bonos'), getData('settings'), getData('holidays'), getData('events'), getData('classCancellations')
-      ]).then(([s, sp, b, p, w, pl, sch, bo, cfg, hol, ev, cc]) => {
+        getData('schedule'), getData('bonos'), getData('settings'), getData('holidays'), getData('events'), getData('classCancellations'), getData('punctualClasses')
+      ]).then(([s, sp, b, p, w, pl, sch, bo, cfg, hol, ev, cc, pc]) => {
         if (cancelled) return;
         if (isAdmin) setStudents(s || []);
         if (isAdmin) setScheduledPosts(sp || []);
@@ -190,6 +195,7 @@ export default function App() {
         setHolidays(hol || []);
         setEvents(ev || []);
         setClassCancellations(cc || []);
+        setPunctualClasses(pc || []);
         if (sch) setSchedule(sch);
         if (bo) setBonos(bo);
         if (cfg) setSettings({ ...DEFAULT_SETTINGS, ...cfg });
@@ -227,6 +233,7 @@ export default function App() {
   function saveEvents(next) { setEvents(next); setData('events', next, adminToken); }
   function saveScheduledPosts(next) { setScheduledPosts(next); setData('scheduledPosts', next, adminToken); }
   function saveClassCancellations(next) { setClassCancellations(next); setData('classCancellations', next, adminToken); }
+  function savePunctualClasses(next) { setPunctualClasses(next); setData('punctualClasses', next, adminToken); }
   function saveSchedule(next) { setSchedule(next); setData('schedule', next, adminToken); }
   function saveBonos(next) { setBonos(next); setData('bonos', next, adminToken); }
   function saveSettings(next) { setSettings(next); setData('settings', next, adminToken); }
@@ -266,7 +273,7 @@ export default function App() {
           <MuroTab wallPosts={wallPosts} polls={polls} savePolls={savePolls} me={me} toast={toast} />
         ) : tab === 'horario' ? (
           <HorarioTab
-            bookings={bookings} schedule={schedule} holidays={holidays} classCancellations={classCancellations} me={me}
+            bookings={bookings} schedule={schedule} holidays={holidays} events={events} classCancellations={classCancellations} punctualClasses={punctualClasses} me={me}
             onPickClass={(cls, dateIso, day) => setModal({ type: 'booking', day, cls, dateIso })}
           />
         ) : tab === 'bonos' ? (
@@ -291,6 +298,7 @@ export default function App() {
             events={events} saveEvents={saveEvents}
             scheduledPosts={scheduledPosts} saveScheduledPosts={saveScheduledPosts}
             classCancellations={classCancellations} saveClassCancellations={saveClassCancellations}
+            punctualClasses={punctualClasses} savePunctualClasses={savePunctualClasses}
             activePurchaseFor={activePurchaseFor} adminToken={adminToken}
             schedule={schedule} saveSchedule={saveSchedule} bonos={bonos} saveBonos={saveBonos}
             settings={settings} saveSettings={saveSettings} onAdminLogout={logoutAdmin}
@@ -428,7 +436,7 @@ function PollCard({ poll, me, polls, savePolls, toast }) {
 }
 
 /* ---------------- HORARIO ---------------- */
-function HorarioTab({ bookings, schedule, holidays, classCancellations, me, onPickClass }) {
+function HorarioTab({ bookings, schedule, holidays, events, classCancellations, punctualClasses, me, onPickClass }) {
   const settings = useContext(SettingsContext);
   const [selectedDate, setSelectedDate] = useState(() => new Date());
   const [monthCursor, setMonthCursor] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
@@ -437,8 +445,12 @@ function HorarioTab({ bookings, schedule, holidays, classCancellations, me, onPi
   const dateIso = isoDate(selectedDate);
   const holiday = isHoliday(holidays, dateIso);
   // Una clase cancelada puntualmente para este día concreto no se ofrece
-  // (el horario semanal sigue igual el resto de semanas).
-  const classes = holiday ? [] : (schedule[dayName] || []).filter(c => !isClassCancelled(classCancellations, dateIso, c.time, c.name));
+  // (el horario semanal sigue igual el resto de semanas). Las clases sueltas
+  // (añadidas por Beatriz solo para este día) se suman a las del horario.
+  const puntualesHoy = holiday ? [] : (punctualClasses || []).filter(p => p.date === dateIso);
+  const classes = holiday ? [] : [...(schedule[dayName] || []), ...puntualesHoy]
+    .filter(c => !isClassCancelled(classCancellations, dateIso, c.time, c.name))
+    .sort((a, b) => a.time.localeCompare(b.time));
   const isToday = sameDate(selectedDate, new Date());
 
   function pickDate(date) {
@@ -449,7 +461,7 @@ function HorarioTab({ bookings, schedule, holidays, classCancellations, me, onPi
   return (
     <>
       <MiniMonthCalendar
-        monthCursor={monthCursor} setMonthCursor={setMonthCursor} selectedDate={selectedDate} holidays={holidays}
+        monthCursor={monthCursor} setMonthCursor={setMonthCursor} selectedDate={selectedDate} holidays={holidays} events={events}
         onPickDate={pickDate}
       />
       <div className="row" style={{ alignItems: 'center', justifyContent: 'space-between', margin: '18px 0 10px' }}>
@@ -470,8 +482,9 @@ function HorarioTab({ bookings, schedule, holidays, classCancellations, me, onPi
         const full = attendees >= cap;
         const isMyBooking = me && bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === c.time && b.className === c.name && occupiesSpot(b.status));
         const past = isPastSlot(dateIso, c.time);
-        const pillLabel = isMyBooking ? 'Reservada' : full ? 'Completo' : past ? 'Finalizada' : 'Reservar';
-        const pillClass = isMyBooking ? 'pill-sage' : (full || past) ? 'pill-gray' : (CLASS_STYLE[c.name] || 'pill-lav');
+        const tooFarAhead = !past && isTooFarAhead(dateIso);
+        const pillLabel = isMyBooking ? 'Reservada' : full ? 'Completo' : past ? 'Finalizada' : tooFarAhead ? 'Próximamente' : 'Reservar';
+        const pillClass = isMyBooking ? 'pill-sage' : (full || past || tooFarAhead) ? 'pill-gray' : (CLASS_STYLE[c.name] || 'pill-lav');
         return (
           <div className="classcard" key={idx} onClick={() => onPickClass(c, dateIso, dayName)}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
@@ -489,7 +502,7 @@ function HorarioTab({ bookings, schedule, holidays, classCancellations, me, onPi
   );
 }
 
-function MiniMonthCalendar({ monthCursor, setMonthCursor, selectedDate, onPickDate, holidays }) {
+function MiniMonthCalendar({ monthCursor, setMonthCursor, selectedDate, onPickDate, holidays, events }) {
   const month = monthCursor.getMonth();
   const gridStart = startOfWeekMonday(new Date(monthCursor.getFullYear(), month, 1));
   const days = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
@@ -509,8 +522,12 @@ function MiniMonthCalendar({ monthCursor, setMonthCursor, selectedDate, onPickDa
           const isSelected = sameDate(d, selectedDate);
           const isToday = sameDate(d, today);
           const holiday = isHoliday(holidays, isoDate(d));
+          // Los eventos especiales (talleres) de este día también se marcan en
+          // el calendario, aunque no sea festivo, para que se vea de un vistazo.
+          const dayEvents = (events || []).filter(e => e.date === isoDate(d) && e.active !== false);
+          const title = [holiday?.label, ...dayEvents.map(e => e.name)].filter(Boolean).join(' · ') || undefined;
           return (
-            <div key={isoDate(d)} onClick={() => onPickDate(d)} title={holiday?.label || undefined}
+            <div key={isoDate(d)} onClick={() => onPickDate(d)} title={title}
               style={{
                 padding: '6px 0', borderRadius: 8, cursor: 'pointer', fontSize: 12.5,
                 opacity: inMonth ? 1 : 0.32,
@@ -519,7 +536,12 @@ function MiniMonthCalendar({ monthCursor, setMonthCursor, selectedDate, onPickDa
                 color: isSelected ? '#fff' : holiday ? 'var(--danger)' : isToday ? 'var(--plum)' : 'var(--ink)'
               }}>
               {d.getDate()}
-              {holiday && <div style={{ width: 4, height: 4, borderRadius: 2, background: isSelected ? '#fff' : 'var(--danger)', margin: '2px auto 0' }} />}
+              {(holiday || dayEvents.length > 0) && (
+                <div style={{ display: 'flex', gap: 2, justifyContent: 'center', marginTop: 2 }}>
+                  {holiday && <div style={{ width: 4, height: 4, borderRadius: 2, background: isSelected ? '#fff' : 'var(--danger)' }} />}
+                  {dayEvents.length > 0 && <div style={{ width: 4, height: 4, borderRadius: 2, background: isSelected ? '#fff' : 'var(--plum)' }} />}
+                </div>
+              )}
             </div>
           );
         })}
@@ -1171,7 +1193,7 @@ function AdminEstadisticas({ students, purchases, bookings, bonos }) {
   );
 }
 
-function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, polls, savePolls, holidays, saveHolidays, events, saveEvents, scheduledPosts, saveScheduledPosts, classCancellations, saveClassCancellations, activePurchaseFor, adminToken, schedule, saveSchedule, bonos, saveBonos, settings, saveSettings, onAdminLogout, savePurchases, saveBookings, saveWallPosts, toast }) {
+function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, polls, savePolls, holidays, saveHolidays, events, saveEvents, scheduledPosts, saveScheduledPosts, classCancellations, saveClassCancellations, punctualClasses, savePunctualClasses, activePurchaseFor, adminToken, schedule, saveSchedule, bonos, saveBonos, settings, saveSettings, onAdminLogout, savePurchases, saveBookings, saveWallPosts, toast }) {
   const [alumnaSearch, setAlumnaSearch] = useState('');
   const tabs = [
     { id: 'estadisticas', label: 'Estadísticas' },
@@ -1198,7 +1220,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
         <AdminEstadisticas students={students} purchases={purchases} bookings={bookings} bonos={bonos} />
       )}
       {adminTab === 'resumen' && (
-        <AdminResumen students={students} bookings={bookings} saveBookings={saveBookings} purchases={purchases} savePurchases={savePurchases} schedule={schedule} holidays={holidays} events={events} classCancellations={classCancellations} saveClassCancellations={saveClassCancellations} toast={toast} />
+        <AdminResumen students={students} bookings={bookings} saveBookings={saveBookings} purchases={purchases} savePurchases={savePurchases} schedule={schedule} holidays={holidays} events={events} classCancellations={classCancellations} saveClassCancellations={saveClassCancellations} punctualClasses={punctualClasses} savePunctualClasses={savePunctualClasses} toast={toast} />
       )}
       {adminTab === 'alumnas' && (
         <>
@@ -1318,7 +1340,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
               })}
         </>
       )}
-      {adminTab === 'horarios' && <AdminHorarios schedule={schedule} saveSchedule={saveSchedule} holidays={holidays} saveHolidays={saveHolidays} toast={toast} />}
+      {adminTab === 'horarios' && <AdminHorarios schedule={schedule} saveSchedule={saveSchedule} holidays={holidays} saveHolidays={saveHolidays} punctualClasses={punctualClasses} savePunctualClasses={savePunctualClasses} toast={toast} />}
       {adminTab === 'gestionbonos' && <AdminBonos bonos={bonos} saveBonos={saveBonos} toast={toast} />}
       {adminTab === 'muro' && <AdminMuro wallPosts={wallPosts} saveWallPosts={saveWallPosts} scheduledPosts={scheduledPosts} saveScheduledPosts={saveScheduledPosts} adminToken={adminToken} toast={toast} />}
       {adminTab === 'encuestas' && <AdminEncuestas polls={polls} savePolls={savePolls} students={students} adminToken={adminToken} toast={toast} />}
@@ -1329,16 +1351,37 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
   );
 }
 
-function AdminHorarios({ schedule, saveSchedule, holidays, saveHolidays, toast }) {
+function AdminHorarios({ schedule, saveSchedule, holidays, saveHolidays, punctualClasses, savePunctualClasses, toast }) {
   const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
   function updateDay(day, classes) {
     saveSchedule({ ...schedule, [day]: classes });
   }
+  function addPunctual({ date, time, name, capacity, duration }) {
+    const entry = { id: uid(), date, time, name, capacity, duration, createdAt: new Date().toISOString() };
+    savePunctualClasses([...(punctualClasses || []), entry]);
+    toast(`Clase puntual "${name}" añadida para el ${fmtDate(new Date(`${date}T12:00:00`))}`);
+  }
+  function removePunctual(p) {
+    if (!confirm(`¿Eliminar la clase puntual "${p.name}" del ${fmtDate(new Date(`${p.date}T12:00:00`))}?`)) return;
+    savePunctualClasses((punctualClasses || []).filter(x => x.id !== p.id));
+  }
+  const upcomingPunctuales = [...(punctualClasses || [])].sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   return (
     <>
       <AdminFestivos holidays={holidays} saveHolidays={saveHolidays} toast={toast} />
+      {upcomingPunctuales.length > 0 && (
+        <div className="card">
+          <h3>Clases puntuales (un solo día)</h3>
+          {upcomingPunctuales.map(p => (
+            <div key={p.id} className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+              <span>{fmtDate(new Date(`${p.date}T12:00:00`))} · {p.time} · {p.name} · aforo {p.capacity} · {slotDuration(p)} min</span>
+              <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => removePunctual(p)}>Eliminar</button>
+            </div>
+          ))}
+        </div>
+      )}
       {days.map(day => (
-        <AdminHorarioDay key={day} day={day} classes={schedule[day] || []} onChange={(next) => updateDay(day, next)} />
+        <AdminHorarioDay key={day} day={day} classes={schedule[day] || []} onChange={(next) => updateDay(day, next)} onAddPunctual={addPunctual} toast={toast} />
       ))}
     </>
   );
@@ -1393,21 +1436,29 @@ function AdminFestivos({ holidays, saveHolidays, toast }) {
   );
 }
 
-function AdminHorarioDay({ day, classes, onChange }) {
+function AdminHorarioDay({ day, classes, onChange, onAddPunctual, toast }) {
   const settings = useContext(SettingsContext);
   const [editing, setEditing] = useState(null); // índice en edición, o 'new'
   const [time, setTime] = useState('');
   const [name, setName] = useState('');
   const [capacity, setCapacity] = useState('');
   const [duration, setDuration] = useState('');
+  const [scope, setScope] = useState('recurrente'); // 'recurrente' | 'puntual' (solo al añadir una clase nueva)
+  const [punctualDate, setPunctualDate] = useState('');
 
-  function startAdd() { setEditing('new'); setTime(''); setName(''); setCapacity(''); setDuration(''); }
+  function startAdd() { setEditing('new'); setTime(''); setName(''); setCapacity(''); setDuration(''); setScope('recurrente'); setPunctualDate(''); }
   function startEdit(i) { setEditing(i); setTime(classes[i].time); setName(classes[i].name); setCapacity(classes[i].capacity ? String(classes[i].capacity) : ''); setDuration(classes[i].duration ? String(classes[i].duration) : ''); }
   function cancel() { setEditing(null); }
   function save() {
     if (!time.trim() || !name.trim()) return;
     const cap = capacity.trim() === '' ? settings.defaultCapacity : (Number(capacity) || settings.defaultCapacity);
     const dur = duration.trim() === '' ? 60 : (Number(duration) || 60);
+    if (editing === 'new' && scope === 'puntual') {
+      if (!punctualDate) { toast('Elige la fecha de la clase puntual'); return; }
+      onAddPunctual({ date: punctualDate, time: time.trim(), name: name.trim(), capacity: cap, duration: dur });
+      setEditing(null);
+      return;
+    }
     let next;
     if (editing === 'new') next = [...classes, { time: time.trim(), name: name.trim(), capacity: cap, duration: dur }];
     else next = classes.map((c, i) => i === editing ? { time: time.trim(), name: name.trim(), capacity: cap, duration: dur } : c);
@@ -1443,13 +1494,24 @@ function AdminHorarioDay({ day, classes, onChange }) {
         </div>
       ))}
       {editing === 'new' ? (
-        <div className="row" style={{ marginTop: 10, alignItems: 'center' }}>
-          <input type="time" value={time} onChange={e => setTime(e.target.value)} style={{ width: 110, flex: 'none' }} />
-          <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Nombre de la clase" style={{ width: 'auto', flex: 1 }} />
-          <input type="number" min="1" value={capacity} onChange={e => setCapacity(e.target.value)} placeholder={`Aforo (${settings.defaultCapacity})`} style={{ width: 90, flex: 'none' }} />
-          <input type="number" min="5" step="5" value={duration} onChange={e => setDuration(e.target.value)} placeholder="Min. (60)" style={{ width: 90, flex: 'none' }} />
-          <button className="btn btn-sage btn-sm" onClick={save}>Añadir</button>
-          <button className="linklike" onClick={cancel}>Cancelar</button>
+        <div style={{ marginTop: 10 }}>
+          <div className="row" style={{ marginBottom: 8 }}>
+            <div className={`chip ${scope === 'recurrente' ? 'active' : ''}`} onClick={() => setScope('recurrente')}>Todas las semanas</div>
+            <div className={`chip ${scope === 'puntual' ? 'active' : ''}`} onClick={() => setScope('puntual')}>Solo un día concreto</div>
+          </div>
+          {scope === 'puntual' && (
+            <input type="date" value={punctualDate} onChange={e => setPunctualDate(e.target.value)} style={{ width: 150, marginBottom: 8 }} />
+          )}
+          <div className="row" style={{ alignItems: 'center' }}>
+            <input type="time" value={time} onChange={e => setTime(e.target.value)} style={{ width: 110, flex: 'none' }} />
+            <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Nombre de la clase" style={{ width: 'auto', flex: 1 }} />
+            <input type="number" min="1" value={capacity} onChange={e => setCapacity(e.target.value)} placeholder={`Aforo (${settings.defaultCapacity})`} style={{ width: 90, flex: 'none' }} />
+            <input type="number" min="5" step="5" value={duration} onChange={e => setDuration(e.target.value)} placeholder="Min. (60)" style={{ width: 90, flex: 'none' }} />
+          </div>
+          <div className="row" style={{ marginTop: 8 }}>
+            <button className="btn btn-sage btn-sm" onClick={save}>{scope === 'puntual' ? 'Añadir clase puntual' : 'Añadir'}</button>
+            <button className="linklike" onClick={cancel}>Cancelar</button>
+          </div>
         </div>
       ) : (
         <button className="linklike" style={{ marginTop: 10 }} onClick={startAdd}>+ Añadir clase</button>
@@ -1539,13 +1601,12 @@ function AdminBonos({ bonos, saveBonos, toast }) {
   );
 }
 
-function AdminResumen({ students, bookings, saveBookings, purchases, savePurchases, schedule, holidays, events, classCancellations, saveClassCancellations, toast }) {
+function AdminResumen({ students, bookings, saveBookings, purchases, savePurchases, schedule, holidays, events, classCancellations, saveClassCancellations, punctualClasses, savePunctualClasses, toast }) {
   const settings = useContext(SettingsContext);
   const [offset, setOffset] = useState(0);
   const [creatingExtra, setCreatingExtra] = useState(false);
   const [extraTime, setExtraTime] = useState('');
   const [extraName, setExtraName] = useState('');
-  const [manualExtras, setManualExtras] = useState([]); // clases puntuales creadas en esta sesión, antes de tener ninguna alumna apuntada
   const [selectedKey, setSelectedKey] = useState(null);
 
   const date = addDays(new Date(), offset);
@@ -1567,16 +1628,18 @@ function AdminResumen({ students, bookings, saveBookings, purchases, savePurchas
     const k = `${b.time}|${b.className}`;
     if (!scheduledKeys.has(k) && !seenExtra.has(k)) { seenExtra.add(k); extraFromBookings.push({ time: b.time, name: b.className }); }
   });
-  manualExtras.forEach(c => {
-    const k = `${c.time}|${c.name}`;
-    if (!scheduledKeys.has(k) && !seenExtra.has(k)) { seenExtra.add(k); extraFromBookings.push(c); }
+  // Clases sueltas que Beatriz ha añadido para este día concreto (desde aquí
+  // o desde Horarios), persistidas de verdad: no desaparecen al recargar.
+  (punctualClasses || []).filter(p => p.date === dateIso).forEach(p => {
+    const k = `${p.time}|${p.name}`;
+    if (!scheduledKeys.has(k) && !seenExtra.has(k)) { seenExtra.add(k); extraFromBookings.push(p); }
   });
   const allClasses = [...classes, ...extraFromBookings].sort((a, b) => a.time.localeCompare(b.time));
 
   function createExtra() {
     if (!extraTime.trim() || !extraName.trim()) { toast('Pon hora y nombre de la clase'); return; }
-    const c = { time: extraTime.trim(), name: extraName.trim() };
-    setManualExtras([...manualExtras, c]);
+    const c = { id: uid(), date: dateIso, time: extraTime.trim(), name: extraName.trim(), capacity: settings.defaultCapacity, duration: 60, createdAt: new Date().toISOString() };
+    savePunctualClasses([...(punctualClasses || []), c]);
     setCreatingExtra(false);
     setExtraTime('');
     setExtraName('');
@@ -1658,14 +1721,15 @@ function AdminResumen({ students, bookings, saveBookings, purchases, savePurchas
             <button className="modal-close" onClick={() => setSelectedKey(null)}>×</button>
             <AdminResumenClass cls={selectedCls} dateIso={dateIso} students={students} bookings={bookings}
               saveBookings={saveBookings} purchases={purchases} savePurchases={savePurchases}
-              classCancellations={classCancellations} saveClassCancellations={saveClassCancellations} toast={toast} />
+              classCancellations={classCancellations} saveClassCancellations={saveClassCancellations}
+              punctualClasses={punctualClasses} savePunctualClasses={savePunctualClasses} toast={toast} />
           </div>
         </div>
       )}
       <div className="card">
         {creatingExtra ? (
           <>
-            <label>Clase puntual (evento especial, solo para este día)</label>
+            <label>Clase puntual (solo para este día)</label>
             <div className="row" style={{ alignItems: 'center' }}>
               <input type="time" value={extraTime} onChange={e => setExtraTime(e.target.value)} style={{ width: 110, flex: 'none' }} />
               <input type="text" value={extraName} onChange={e => setExtraName(e.target.value)} placeholder="Nombre de la clase/evento" style={{ width: 'auto', flex: 1 }} />
@@ -1676,14 +1740,14 @@ function AdminResumen({ students, bookings, saveBookings, purchases, savePurchas
             </div>
           </>
         ) : (
-          <button className="linklike" onClick={() => setCreatingExtra(true)}>+ Crear clase puntual (evento especial)</button>
+          <button className="linklike" onClick={() => setCreatingExtra(true)}>+ Añadir clase puntual (solo este día)</button>
         )}
       </div>
     </>
   );
 }
 
-function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, purchases, savePurchases, classCancellations, saveClassCancellations, toast }) {
+function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, purchases, savePurchases, classCancellations, saveClassCancellations, punctualClasses, savePunctualClasses, toast }) {
   const settings = useContext(SettingsContext);
   const [adding, setAdding] = useState(false);
   const [addMode, setAddMode] = useState('puntual'); // 'puntual' | 'fija'
@@ -1810,6 +1874,33 @@ function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, 
     toast('Clase reactivada para este día');
   }
 
+  // Las clases puntuales (añadidas para un único día, sin horario semanal
+  // detrás) no se "cancelan": al no tener recurrencia, eliminarlas directamente
+  // ya las quita del todo, no hace falta guardar una cancelación aparte.
+  function deletePunctual() {
+    const toCancel = allForClass.filter(x => x.status !== 'cancelada');
+    const msg = toCancel.length > 0
+      ? `¿Eliminar la clase puntual ${c.name} de ${fmtDate(new Date(`${dateIso}T12:00:00`))} (${c.time})?\n\nHay ${toCancel.length} alumna${toCancel.length === 1 ? '' : 's'} apuntada${toCancel.length === 1 ? '' : 's'}: se le${toCancel.length === 1 ? '' : 's'} cancelará la reserva (y se le${toCancel.length === 1 ? '' : 's'} devolverá la clase si la pagó con bono). Avísala${toCancel.length === 1 ? '' : 's'} tú directamente.`
+      : `¿Eliminar la clase puntual ${c.name} de ${fmtDate(new Date(`${dateIso}T12:00:00`))} (${c.time})?`;
+    if (!confirm(msg)) return;
+    if (toCancel.length > 0) {
+      saveBookings(bookings.map(x => toCancel.some(y => y.id === x.id) ? { ...x, status: 'cancelada' } : x));
+      if (purchases && savePurchases) {
+        const bonoBookings = toCancel.filter(x => x.paymentMethod === 'bono');
+        if (bonoBookings.length > 0) {
+          let nextPurchases = purchases;
+          bonoBookings.forEach(x => {
+            const purchase = findBonoPurchaseForBooking(x, nextPurchases);
+            if (purchase) nextPurchases = nextPurchases.map(p => p.id === purchase.id ? { ...p, classesUsed: Math.max(0, (p.classesUsed || 0) - 1) } : p);
+          });
+          savePurchases(nextPurchases);
+        }
+      }
+    }
+    savePunctualClasses((punctualClasses || []).filter(x => x.id !== c.id));
+    toast('Clase puntual eliminada');
+  }
+
   const cancelled = isClassCancelled(classCancellations, dateIso, c.time, c.name);
   if (cancelled) {
     return (
@@ -1904,7 +1995,11 @@ function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, 
         </button>
       )}
       <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
-        <button className="linklike" style={{ color: 'var(--danger)' }} onClick={cancelOccurrence}>Cancelar esta clase (solo este día)</button>
+        {c.id ? (
+          <button className="linklike" style={{ color: 'var(--danger)' }} onClick={deletePunctual}>Eliminar esta clase puntual</button>
+        ) : (
+          <button className="linklike" style={{ color: 'var(--danger)' }} onClick={cancelOccurrence}>Cancelar esta clase (solo este día)</button>
+        )}
       </div>
     </div>
   );
@@ -2375,6 +2470,7 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
   if (dateIso) {
     const full = attendeeCount >= capacity;
     const past = isPastSlot(dateIso, cls.time);
+    const tooFarAhead = !past && isTooFarAhead(dateIso);
     const cancelled = isClassCancelled(classCancellations, dateIso, cls.time, cls.name);
     if (me) {
       const already = bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === cls.time && b.className === cls.name && occupiesSpot(b.status));
@@ -2384,6 +2480,8 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
         step2 = <p className="muted" style={{ marginTop: 12 }}>Ya tienes esta clase reservada ese día.</p>;
       } else if (past) {
         step2 = <p className="muted" style={{ marginTop: 12 }}>Esta clase ya ha pasado. Elige otra fecha u hora.</p>;
+      } else if (tooFarAhead) {
+        step2 = <p className="muted" style={{ marginTop: 12 }}>Esta clase solo se puede reservar con un máximo de {BOOKING_WINDOW_DAYS} días de antelación. Vuelve más cerca de la fecha.</p>;
       } else if (full) {
         const onWaitlist = bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === cls.time && b.className === cls.name && b.status === 'en_espera');
         step2 = onWaitlist ? (
@@ -2431,6 +2529,13 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
         <>
           <hr className="sep" />
           <p className="muted">Esta clase ya ha pasado. Elige otra fecha u hora.</p>
+        </>
+      );
+    } else if (tooFarAhead) {
+      step2 = (
+        <>
+          <hr className="sep" />
+          <p className="muted">Esta clase solo se puede reservar con un máximo de {BOOKING_WINDOW_DAYS} días de antelación. Vuelve más cerca de la fecha.</p>
         </>
       );
     } else if (full) {
