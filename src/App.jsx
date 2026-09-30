@@ -96,6 +96,10 @@ function slotDuration(c) { return c.duration || 60; }
 const STATUS_LABELS = { confirmada: 'Confirmada', pendiente_pago: 'Pendiente de pago', cancelada: 'Cancelada', en_espera: 'En lista de espera' };
 const RECURRING_WEEKS = 10; // nº de semanas que se crean de golpe al añadir una alumna "fija"
 function isHoliday(holidays, dateIso) { return (holidays || []).find(h => h.date === dateIso); }
+// Cancelación puntual de UNA clase en UN día concreto (el horario semanal no cambia).
+function isClassCancelled(classCancellations, dateIso, time, className) {
+  return (classCancellations || []).some(c => c.date === dateIso && c.time === time && c.className === className);
+}
 // Usa la hora local del dispositivo (la de la propia alumna), que para este
 // uso es más fiable que calcularlo en el servidor con otro huso horario.
 function isPastSlot(dateIso, time) { return new Date(`${dateIso}T${time}`).getTime() < Date.now(); }
@@ -150,6 +154,7 @@ export default function App() {
   const [holidays, setHolidays] = useState([]);
   const [events, setEvents] = useState([]);
   const [scheduledPosts, setScheduledPosts] = useState([]);
+  const [classCancellations, setClassCancellations] = useState([]);
   const [schedule, setSchedule] = useState(DEFAULT_SCHEDULE);
   const [bonos, setBonos] = useState(DEFAULT_BONOS);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -173,8 +178,8 @@ export default function App() {
         isAdmin ? getData('students', adminToken) : Promise.resolve(null),
         isAdmin ? getData('scheduledPosts', adminToken) : Promise.resolve(null),
         getData('bookings'), getData('purchases'), getData('wallPosts'), getData('polls'),
-        getData('schedule'), getData('bonos'), getData('settings'), getData('holidays'), getData('events')
-      ]).then(([s, sp, b, p, w, pl, sch, bo, cfg, hol, ev]) => {
+        getData('schedule'), getData('bonos'), getData('settings'), getData('holidays'), getData('events'), getData('classCancellations')
+      ]).then(([s, sp, b, p, w, pl, sch, bo, cfg, hol, ev, cc]) => {
         if (cancelled) return;
         if (isAdmin) setStudents(s || []);
         if (isAdmin) setScheduledPosts(sp || []);
@@ -184,6 +189,7 @@ export default function App() {
         setPolls(pl || []);
         setHolidays(hol || []);
         setEvents(ev || []);
+        setClassCancellations(cc || []);
         if (sch) setSchedule(sch);
         if (bo) setBonos(bo);
         if (cfg) setSettings({ ...DEFAULT_SETTINGS, ...cfg });
@@ -220,6 +226,7 @@ export default function App() {
   function saveHolidays(next) { setHolidays(next); setData('holidays', next, adminToken); }
   function saveEvents(next) { setEvents(next); setData('events', next, adminToken); }
   function saveScheduledPosts(next) { setScheduledPosts(next); setData('scheduledPosts', next, adminToken); }
+  function saveClassCancellations(next) { setClassCancellations(next); setData('classCancellations', next, adminToken); }
   function saveSchedule(next) { setSchedule(next); setData('schedule', next, adminToken); }
   function saveBonos(next) { setBonos(next); setData('bonos', next, adminToken); }
   function saveSettings(next) { setSettings(next); setData('settings', next, adminToken); }
@@ -259,7 +266,7 @@ export default function App() {
           <MuroTab wallPosts={wallPosts} polls={polls} savePolls={savePolls} me={me} toast={toast} />
         ) : tab === 'horario' ? (
           <HorarioTab
-            bookings={bookings} schedule={schedule} holidays={holidays} me={me}
+            bookings={bookings} schedule={schedule} holidays={holidays} classCancellations={classCancellations} me={me}
             onPickClass={(cls, dateIso, day) => setModal({ type: 'booking', day, cls, dateIso })}
           />
         ) : tab === 'bonos' ? (
@@ -283,6 +290,7 @@ export default function App() {
             polls={polls} savePolls={savePolls} holidays={holidays} saveHolidays={saveHolidays}
             events={events} saveEvents={saveEvents}
             scheduledPosts={scheduledPosts} saveScheduledPosts={saveScheduledPosts}
+            classCancellations={classCancellations} saveClassCancellations={saveClassCancellations}
             activePurchaseFor={activePurchaseFor} adminToken={adminToken}
             schedule={schedule} saveSchedule={saveSchedule} bonos={bonos} saveBonos={saveBonos}
             settings={settings} saveSettings={saveSettings} onAdminLogout={logoutAdmin}
@@ -297,7 +305,7 @@ export default function App() {
       {toastMsg && <div className="toast">{toastMsg}</div>}
       {modal && modal.type === 'booking' && (
         <BookingModal
-          modal={modal} bonos={bonos}
+          modal={modal} bonos={bonos} classCancellations={classCancellations}
           bookings={bookings} saveBookings={saveBookings} purchases={purchases} savePurchases={savePurchases}
           me={me} myId={myId} pickProfile={pickProfile} activePurchaseFor={activePurchaseFor}
           toast={toast} onClose={() => setModal(null)}
@@ -420,7 +428,7 @@ function PollCard({ poll, me, polls, savePolls, toast }) {
 }
 
 /* ---------------- HORARIO ---------------- */
-function HorarioTab({ bookings, schedule, holidays, me, onPickClass }) {
+function HorarioTab({ bookings, schedule, holidays, classCancellations, me, onPickClass }) {
   const settings = useContext(SettingsContext);
   const [selectedDate, setSelectedDate] = useState(() => new Date());
   const [monthCursor, setMonthCursor] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
@@ -428,7 +436,9 @@ function HorarioTab({ bookings, schedule, holidays, me, onPickClass }) {
   const dayName = dayNameForDate(selectedDate);
   const dateIso = isoDate(selectedDate);
   const holiday = isHoliday(holidays, dateIso);
-  const classes = holiday ? [] : (schedule[dayName] || []);
+  // Una clase cancelada puntualmente para este día concreto no se ofrece
+  // (el horario semanal sigue igual el resto de semanas).
+  const classes = holiday ? [] : (schedule[dayName] || []).filter(c => !isClassCancelled(classCancellations, dateIso, c.time, c.name));
   const isToday = sameDate(selectedDate, new Date());
 
   function pickDate(date) {
@@ -1161,7 +1171,7 @@ function AdminEstadisticas({ students, purchases, bookings, bonos }) {
   );
 }
 
-function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, polls, savePolls, holidays, saveHolidays, events, saveEvents, scheduledPosts, saveScheduledPosts, activePurchaseFor, adminToken, schedule, saveSchedule, bonos, saveBonos, settings, saveSettings, onAdminLogout, savePurchases, saveBookings, saveWallPosts, toast }) {
+function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, polls, savePolls, holidays, saveHolidays, events, saveEvents, scheduledPosts, saveScheduledPosts, classCancellations, saveClassCancellations, activePurchaseFor, adminToken, schedule, saveSchedule, bonos, saveBonos, settings, saveSettings, onAdminLogout, savePurchases, saveBookings, saveWallPosts, toast }) {
   const [alumnaSearch, setAlumnaSearch] = useState('');
   const tabs = [
     { id: 'estadisticas', label: 'Estadísticas' },
@@ -1188,7 +1198,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
         <AdminEstadisticas students={students} purchases={purchases} bookings={bookings} bonos={bonos} />
       )}
       {adminTab === 'resumen' && (
-        <AdminResumen students={students} bookings={bookings} saveBookings={saveBookings} purchases={purchases} savePurchases={savePurchases} schedule={schedule} holidays={holidays} events={events} toast={toast} />
+        <AdminResumen students={students} bookings={bookings} saveBookings={saveBookings} purchases={purchases} savePurchases={savePurchases} schedule={schedule} holidays={holidays} events={events} classCancellations={classCancellations} saveClassCancellations={saveClassCancellations} toast={toast} />
       )}
       {adminTab === 'alumnas' && (
         <>
@@ -1529,7 +1539,7 @@ function AdminBonos({ bonos, saveBonos, toast }) {
   );
 }
 
-function AdminResumen({ students, bookings, saveBookings, purchases, savePurchases, schedule, holidays, events, toast }) {
+function AdminResumen({ students, bookings, saveBookings, purchases, savePurchases, schedule, holidays, events, classCancellations, saveClassCancellations, toast }) {
   const settings = useContext(SettingsContext);
   const [offset, setOffset] = useState(0);
   const [creatingExtra, setCreatingExtra] = useState(false);
@@ -1618,21 +1628,22 @@ function AdminResumen({ students, bookings, saveBookings, purchases, savePurchas
               ))}
               {allClasses.map((c, idx) => {
                 const key = `${c.time}|${c.name}`;
+                const cancelled = isClassCancelled(classCancellations, dateIso, c.time, c.name);
                 const attendees = bookings.filter(b => b.date === dateIso && b.time === c.time && b.className === c.name && occupiesSpot(b.status)).length;
                 const waiting = bookings.filter(b => b.date === dateIso && b.time === c.time && b.className === c.name && b.status === 'en_espera').length;
                 const cap = c.capacity || settings.defaultCapacity;
                 const full = attendees >= cap;
                 const top = (toMinutes(c.time) - rangeStart) * PX_PER_MIN;
                 const height = Math.max(slotDuration(c) * PX_PER_MIN, MIN_BLOCK_H);
-                const styleClass = CLASS_STYLE[c.name] || 'pill-gray';
+                const styleClass = cancelled ? 'pill-gray' : (CLASS_STYLE[c.name] || 'pill-gray');
                 return (
                   <div key={idx}
                     className={`timeline-block ${styleClass} ${key === selectedKey ? 'selected' : ''} ${full ? 'full' : ''}`}
-                    style={{ top, height }}
+                    style={{ top, height, opacity: cancelled ? 0.6 : 1 }}
                     onClick={() => setSelectedKey(key === selectedKey ? null : key)}>
                     <div className="tb-time">{c.time}</div>
-                    <div className="tb-name">{c.name}</div>
-                    <div className="tb-meta">{attendees}/{cap}{waiting > 0 ? ` · +${waiting} en espera` : ''}</div>
+                    <div className="tb-name" style={cancelled ? { textDecoration: 'line-through' } : undefined}>{c.name}</div>
+                    <div className="tb-meta">{cancelled ? 'Cancelada este día' : `${attendees}/${cap}${waiting > 0 ? ` · +${waiting} en espera` : ''}`}</div>
                   </div>
                 );
               })}
@@ -1646,7 +1657,8 @@ function AdminResumen({ students, bookings, saveBookings, purchases, savePurchas
           <div className="modal-sheet">
             <button className="modal-close" onClick={() => setSelectedKey(null)}>×</button>
             <AdminResumenClass cls={selectedCls} dateIso={dateIso} students={students} bookings={bookings}
-              saveBookings={saveBookings} purchases={purchases} savePurchases={savePurchases} toast={toast} />
+              saveBookings={saveBookings} purchases={purchases} savePurchases={savePurchases}
+              classCancellations={classCancellations} saveClassCancellations={saveClassCancellations} toast={toast} />
           </div>
         </div>
       )}
@@ -1671,7 +1683,7 @@ function AdminResumen({ students, bookings, saveBookings, purchases, savePurchas
   );
 }
 
-function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, purchases, savePurchases, toast }) {
+function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, purchases, savePurchases, classCancellations, saveClassCancellations, toast }) {
   const settings = useContext(SettingsContext);
   const [adding, setAdding] = useState(false);
   const [addMode, setAddMode] = useState('puntual'); // 'puntual' | 'fija'
@@ -1767,6 +1779,54 @@ function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, 
     toast('Movida de lista de espera a confirmada');
   }
 
+  // Cancela ESTA clase concreta solo para este día (el horario semanal no
+  // cambia; el resto de semanas de este día de la semana siguen igual).
+  function cancelOccurrence() {
+    const toCancel = allForClass.filter(x => x.status !== 'cancelada');
+    const msg = toCancel.length > 0
+      ? `¿Cancelar ${c.name} de ${fmtDate(new Date(`${dateIso}T12:00:00`))} (${c.time})?\n\nHay ${toCancel.length} alumna${toCancel.length === 1 ? '' : 's'} apuntada${toCancel.length === 1 ? '' : 's'}: se le${toCancel.length === 1 ? '' : 's'} cancelará la reserva (y se le${toCancel.length === 1 ? '' : 's'} devolverá la clase si la pagó con bono). Avísala${toCancel.length === 1 ? '' : 's'} tú directamente.\n\nEl resto de semanas de este día no se ven afectadas.`
+      : `¿Cancelar ${c.name} de ${fmtDate(new Date(`${dateIso}T12:00:00`))} (${c.time}) solo para este día? El resto de semanas no se ven afectadas.`;
+    if (!confirm(msg)) return;
+    if (toCancel.length > 0) {
+      saveBookings(bookings.map(x => toCancel.some(y => y.id === x.id) ? { ...x, status: 'cancelada' } : x));
+      if (purchases && savePurchases) {
+        const bonoBookings = toCancel.filter(x => x.paymentMethod === 'bono');
+        if (bonoBookings.length > 0) {
+          let nextPurchases = purchases;
+          bonoBookings.forEach(x => {
+            const purchase = findBonoPurchaseForBooking(x, nextPurchases);
+            if (purchase) nextPurchases = nextPurchases.map(p => p.id === purchase.id ? { ...p, classesUsed: Math.max(0, (p.classesUsed || 0) - 1) } : p);
+          });
+          savePurchases(nextPurchases);
+        }
+      }
+    }
+    saveClassCancellations([...(classCancellations || []), { id: uid(), date: dateIso, time: c.time, className: c.name, createdAt: new Date().toISOString() }]);
+    toast('Clase cancelada solo para este día. El resto de semanas sigue igual.');
+  }
+
+  function reactivateOccurrence() {
+    saveClassCancellations((classCancellations || []).filter(x => !(x.date === dateIso && x.time === c.time && x.className === c.name)));
+    toast('Clase reactivada para este día');
+  }
+
+  const cancelled = isClassCancelled(classCancellations, dateIso, c.time, c.name);
+  if (cancelled) {
+    return (
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 13, justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
+            <div className="time">{c.time}</div>
+            <div className="name" style={{ textDecoration: 'line-through' }}>{c.name}</div>
+          </div>
+          <span className="pill pill-gray">Cancelada</span>
+        </div>
+        <p className="muted" style={{ marginTop: 10 }}>Esta clase está cancelada solo para este día. El resto de semanas de este día sigue con normalidad.</p>
+        <button className="btn btn-sage btn-sm" style={{ marginTop: 8 }} onClick={reactivateOccurrence}>Reactivar esta clase</button>
+      </div>
+    );
+  }
+
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 13, justifyContent: 'space-between' }}>
@@ -1843,6 +1903,9 @@ function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, 
           {full ? '+ Añadir a lista de espera' : '+ Añadir alumna'}
         </button>
       )}
+      <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
+        <button className="linklike" style={{ color: 'var(--danger)' }} onClick={cancelOccurrence}>Cancelar esta clase (solo este día)</button>
+      </div>
     </div>
   );
 }
@@ -2258,7 +2321,7 @@ function AdminEventos({ events, saveEvents, bookings, students, adminToken, toas
 }
 
 /* ---------------- MODALES ---------------- */
-function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases, bonos, me, pickProfile, activePurchaseFor, toast, onClose }) {
+function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases, bonos, me, pickProfile, activePurchaseFor, classCancellations, toast, onClose }) {
   const settings = useContext(SettingsContext);
   const { day, cls, dateIso } = modal;
   // Evita reservas/pagos duplicados por doble tap o doble clic: el estado de
@@ -2312,9 +2375,12 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
   if (dateIso) {
     const full = attendeeCount >= capacity;
     const past = isPastSlot(dateIso, cls.time);
+    const cancelled = isClassCancelled(classCancellations, dateIso, cls.time, cls.name);
     if (me) {
       const already = bookings.some(b => b.studentId === me.id && b.date === dateIso && b.time === cls.time && b.className === cls.name && occupiesSpot(b.status));
-      if (already) {
+      if (cancelled) {
+        step2 = <p className="muted" style={{ marginTop: 12 }}>Esta clase se ha cancelado para este día. Elige otra fecha.</p>;
+      } else if (already) {
         step2 = <p className="muted" style={{ marginTop: 12 }}>Ya tienes esta clase reservada ese día.</p>;
       } else if (past) {
         step2 = <p className="muted" style={{ marginTop: 12 }}>Esta clase ya ha pasado. Elige otra fecha u hora.</p>;
@@ -2353,6 +2419,13 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
           </>
         );
       }
+    } else if (cancelled) {
+      step2 = (
+        <>
+          <hr className="sep" />
+          <p className="muted">Esta clase se ha cancelado para este día. Elige otra fecha.</p>
+        </>
+      );
     } else if (past) {
       step2 = (
         <>

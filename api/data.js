@@ -6,7 +6,7 @@ const redis = Redis.fromEnv();
 
 // Solo se permite leer/escribir estas claves compartidas.
 // Evita que alguien use el endpoint para escribir cualquier cosa en tu Redis.
-const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts', 'schedule', 'bonos', 'settings', 'polls', 'holidays', 'events', 'scheduledPosts'];
+const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts', 'schedule', 'bonos', 'settings', 'polls', 'holidays', 'events', 'scheduledPosts', 'classCancellations'];
 
 // 'students' contiene datos personales de todas las alumnas: ni lectura ni
 // escritura completas sin ser admin (las alumnas usan api/student-profile.js
@@ -16,10 +16,12 @@ const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts', 'schedul
 const ADMIN_ONLY_READ_KEYS = ['students', 'scheduledPosts'];
 
 // 'wallPosts' (el Muro), 'schedule' (horarios), 'bonos', 'settings',
-// 'holidays' (días festivos) y 'events' (eventos especiales, solo la ficha
-// del evento en sí: apuntarse a uno crea una reserva normal en 'bookings')
-// los lee cualquier alumna, pero solo Beatriz los edita.
-const ADMIN_ONLY_WRITE_KEYS = ['students', 'wallPosts', 'schedule', 'bonos', 'settings', 'holidays', 'events', 'scheduledPosts'];
+// 'holidays' (días festivos), 'events' (eventos especiales, solo la ficha
+// del evento en sí: apuntarse a uno crea una reserva normal en 'bookings') y
+// 'classCancellations' (cancelaciones puntuales de una clase concreta, un
+// solo día, sin tocar el horario semanal) los lee cualquier alumna, pero
+// solo Beatriz los edita.
+const ADMIN_ONLY_WRITE_KEYS = ['students', 'wallPosts', 'schedule', 'bonos', 'settings', 'holidays', 'events', 'scheduledPosts', 'classCancellations'];
 
 // Para 'bookings' y 'purchases', las alumnas sí necesitan poder crear su propia
 // reserva/compra sin ser admin. Sin token, solo se permite un cambio mínimo y
@@ -98,7 +100,7 @@ function isPastSlot(item) {
   return `${item.date}T${item.time}` < madridNowString();
 }
 
-function isBookingChangeAllowed(diff, current, schedule, holidays, events) {
+function isBookingChangeAllowed(diff, current, schedule, holidays, events, classCancellations) {
   if (!diff) return false;
   if (diff.type === 'noop') return true;
 
@@ -128,6 +130,10 @@ function isBookingChangeAllowed(diff, current, schedule, holidays, events) {
   // (Beatriz lo ha creado a propósito para esa fecha).
   const ev = eventFor(events, item);
   if (!ev && (holidays || []).some(h => h.date === item.date)) return false;
+
+  // Beatriz ha cancelado puntualmente esta clase concreta ese día (el
+  // horario semanal sigue igual el resto de semanas).
+  if ((classCancellations || []).some(c => c.date === item.date && c.time === item.time && c.className === item.className)) return false;
 
   // No se puede reservar (ni apuntarse a la lista de espera de) una clase
   // cuya fecha/hora ya ha pasado.
@@ -372,7 +378,8 @@ export default async function handler(req, res) {
           const schedule = await redis.get('schedule');
           const holidays = await redis.get('holidays');
           const events = await redis.get('events');
-          allowed = isBookingChangeAllowed(diff, current, schedule, holidays, events);
+          const classCancellations = await redis.get('classCancellations');
+          allowed = isBookingChangeAllowed(diff, current, schedule, holidays, events, classCancellations);
         } else if (key === 'purchases') {
           allowed = isPurchaseChangeAllowed(diff);
         } else {
