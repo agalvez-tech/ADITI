@@ -66,8 +66,9 @@ const DEFAULT_BONOS = [
   { id: 'bono12', name: 'Bono 12', desc: '12 clases al mes · 3 días a la semana', price: 120, classes: 12, trimestrePrice: 325 },
   { id: 'ilimitado', name: 'Bono ilimitado', desc: 'Clases ilimitadas', price: 150, classes: null, trimestrePrice: 405 }
 ];
-const DEFAULT_SETTINGS = { claseSueltaPrice: 20, bizumPhone: '691750534', whatsappPhone: '34652689928', defaultCapacity: 8 };
+const DEFAULT_SETTINGS = { claseSueltaPrice: 20, bizumPhone: '691750534', whatsappPhone: '34652689928', defaultCapacity: 8, freezePrice: 3, freezeMaxDays: 30 };
 const SettingsContext = React.createContext(DEFAULT_SETTINGS);
+const FreezeContext = React.createContext({ freezes: [], saveFreezes: () => {} });
 function bonoTrimestre(b) {
   if (!b || !b.trimestrePrice) return null;
   return { price: b.trimestrePrice, ahorro: b.price * 3 - b.trimestrePrice };
@@ -107,6 +108,37 @@ function isPastSlot(dateIso, time) { return new Date(`${dateIso}T${time}`).getTi
 // antelación (si hoy es miércoles, como muy tarde el miércoles siguiente).
 const BOOKING_WINDOW_DAYS = 7;
 function isTooFarAhead(dateIso) { return dateIso > isoDate(addDays(new Date(), BOOKING_WINDOW_DAYS)); }
+
+// Congelación de bono: mientras dura, el bono no se puede usar y su caducidad
+// ya se ha alargado los mismos días (al confirmarse la congelación).
+function isFrozenOn(freezes, purchaseId, dateIso) {
+  return (freezes || []).some(f => f.purchaseId === purchaseId && f.status === 'confirmado' && f.startDate <= dateIso && dateIso <= f.endDate);
+}
+function freezesOf(freezes, purchaseId) {
+  return (freezes || []).filter(f => f.purchaseId === purchaseId && f.status !== 'cancelado').sort((a, b) => a.startDate.localeCompare(b.startDate));
+}
+function freezeDays(startIso, endIso) {
+  return Math.round((new Date(`${endIso}T12:00:00`) - new Date(`${startIso}T12:00:00`)) / 86400000) + 1;
+}
+function fmtIso(dateIso) { return fmtDate(new Date(`${dateIso}T12:00:00`)); }
+// Reservas con bono que quedan dentro del periodo congelado (solo futuras).
+function bookingsInFreeze(bookings, freeze) {
+  const todayIso = isoDate(new Date());
+  return bookings.filter(b => b.studentId === freeze.studentId && b.paymentMethod === 'bono' && occupiesSpot(b.status)
+    && b.date >= todayIso && b.date >= freeze.startDate && b.date <= freeze.endDate && (!b.purchaseId || b.purchaseId === freeze.purchaseId));
+}
+// Aplica una congelación confirmada: alarga la caducidad del bono y cancela
+// (devolviendo la clase al bono) las reservas con bono de esos días.
+function applyFreeze(freeze, purchases, bookings) {
+  const toCancel = bookingsInFreeze(bookings, freeze);
+  let nextPurchases = purchases.map(p => p.id === freeze.purchaseId ? { ...p, expiryDate: addDays(new Date(p.expiryDate), freeze.days).toISOString() } : p);
+  toCancel.forEach(b => {
+    const purchase = findBonoPurchaseForBooking(b, nextPurchases);
+    if (purchase) nextPurchases = nextPurchases.map(p => p.id === purchase.id ? { ...p, classesUsed: Math.max(0, (p.classesUsed || 0) - 1) } : p);
+  });
+  const nextBookings = bookings.map(b => toCancel.some(x => x.id === b.id) ? { ...b, status: 'cancelada' } : b);
+  return { nextPurchases, nextBookings, cancelled: toCancel.length };
+}
 
 // Cancelar con menos de estas horas de antelación no devuelve la clase al bono.
 const LATE_CANCEL_HOURS = 3;
@@ -160,6 +192,7 @@ export default function App() {
   const [scheduledPosts, setScheduledPosts] = useState([]);
   const [classCancellations, setClassCancellations] = useState([]);
   const [punctualClasses, setPunctualClasses] = useState([]);
+  const [freezes, setFreezes] = useState([]);
   const [schedule, setSchedule] = useState(DEFAULT_SCHEDULE);
   const [bonos, setBonos] = useState(DEFAULT_BONOS);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -183,8 +216,8 @@ export default function App() {
         isAdmin ? getData('students', adminToken) : Promise.resolve(null),
         isAdmin ? getData('scheduledPosts', adminToken) : Promise.resolve(null),
         getData('bookings'), getData('purchases'), getData('wallPosts'), getData('polls'),
-        getData('schedule'), getData('bonos'), getData('settings'), getData('holidays'), getData('events'), getData('classCancellations'), getData('punctualClasses')
-      ]).then(([s, sp, b, p, w, pl, sch, bo, cfg, hol, ev, cc, pc]) => {
+        getData('schedule'), getData('bonos'), getData('settings'), getData('holidays'), getData('events'), getData('classCancellations'), getData('punctualClasses'), getData('freezes')
+      ]).then(([s, sp, b, p, w, pl, sch, bo, cfg, hol, ev, cc, pc, fz]) => {
         if (cancelled) return;
         if (isAdmin) setStudents(s || []);
         if (isAdmin) setScheduledPosts(sp || []);
@@ -196,6 +229,7 @@ export default function App() {
         setEvents(ev || []);
         setClassCancellations(cc || []);
         setPunctualClasses(pc || []);
+        setFreezes(fz || []);
         if (sch) setSchedule(sch);
         if (bo) setBonos(bo);
         if (cfg) setSettings({ ...DEFAULT_SETTINGS, ...cfg });
@@ -234,6 +268,7 @@ export default function App() {
   function saveScheduledPosts(next) { setScheduledPosts(next); setData('scheduledPosts', next, adminToken); }
   function saveClassCancellations(next) { setClassCancellations(next); setData('classCancellations', next, adminToken); }
   function savePunctualClasses(next) { setPunctualClasses(next); setData('punctualClasses', next, adminToken); }
+  function saveFreezes(next) { setFreezes(next); setData('freezes', next, adminToken); }
   function saveSchedule(next) { setSchedule(next); setData('schedule', next, adminToken); }
   function saveBonos(next) { setBonos(next); setData('bonos', next, adminToken); }
   function saveSettings(next) { setSettings(next); setData('settings', next, adminToken); }
@@ -258,12 +293,14 @@ export default function App() {
   function activePurchaseFor(studentId, onDate) {
     const today = onDate || new Date();
     return purchases
-      .filter(p => p.studentId === studentId && p.status === 'confirmado' && new Date(p.expiryDate) >= today && (p.classesTotal === null || p.classesUsed < p.classesTotal))
+      .filter(p => p.studentId === studentId && p.status === 'confirmado' && new Date(p.expiryDate) >= today && (p.classesTotal === null || p.classesUsed < p.classesTotal)
+        && !isFrozenOn(freezes, p.id, isoDate(today)))
       .sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate))[0];
   }
 
   return (
     <SettingsContext.Provider value={settings}>
+    <FreezeContext.Provider value={{ freezes, saveFreezes }}>
     <div className="app-wrap">
       <Header tab={tab} />
       <div className="content">
@@ -286,7 +323,8 @@ export default function App() {
             onRequestEvent={(event) => {
               if (!me) { toast('Completa tu perfil antes de apuntarte'); setTab('perfil'); return; }
               setModal({ type: 'event', event });
-            }} />
+            }}
+            onRequestFreeze={(purchase) => setModal({ type: 'freeze', purchase })} />
         ) : tab === 'perfil' ? (
           <PerfilTab me={me} pickProfile={pickProfile} clearProfile={clearProfile} bonos={bonos}
             purchases={purchases} savePurchases={savePurchases} bookings={bookings} saveBookings={saveBookings} activePurchaseFor={activePurchaseFor}
@@ -327,7 +365,11 @@ export default function App() {
         <EventModal modal={modal} me={me} bookings={bookings} saveBookings={saveBookings}
           toast={toast} onClose={() => setModal(null)} />
       )}
+      {modal && modal.type === 'freeze' && (
+        <FreezeModal modal={modal} me={me} bookings={bookings} toast={toast} onClose={() => setModal(null)} />
+      )}
     </div>
+    </FreezeContext.Provider>
     </SettingsContext.Provider>
   );
 }
@@ -551,9 +593,18 @@ function MiniMonthCalendar({ monthCursor, setMonthCursor, selectedDate, onPickDa
 }
 
 /* ---------------- BONOS ---------------- */
-function BonosTab({ me, activePurchaseFor, purchases, bonos, events, bookings, onRequestBono, onRequestEvent }) {
+function BonosTab({ me, activePurchaseFor, purchases, bonos, events, bookings, onRequestBono, onRequestEvent, onRequestFreeze }) {
   const settings = useContext(SettingsContext);
-  const active = me ? activePurchaseFor(me.id) : null;
+  const { freezes } = useContext(FreezeContext);
+  const usable = me ? activePurchaseFor(me.id) : null;
+  // Un bono congelado hoy no sale como "activo", pero sigue siendo su bono.
+  const frozenNow = me && !usable
+    ? purchases.filter(p => p.studentId === me.id && p.status === 'confirmado' && new Date(p.expiryDate) >= new Date() && (p.classesTotal === null || p.classesUsed < p.classesTotal)
+      && isFrozenOn(freezes, p.id, isoDate(new Date()))).sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate))[0]
+    : null;
+  const active = usable || frozenNow;
+  const activeFreezes = active ? freezesOf(freezes, active.id).filter(f => f.endDate >= isoDate(new Date()) || f.status === 'pendiente') : [];
+  const hasPendingFreeze = activeFreezes.some(f => f.status === 'pendiente');
   const pendiente = me ? purchases.filter(p => p.studentId === me.id && p.status === 'pendiente').sort((a, b) => new Date(b.purchaseDate) - new Date(a.purchaseDate))[0] : null;
   const upcomingEvents = [...(events || [])]
     .filter(e => e.active !== false && !isPastSlot(e.date, e.time))
@@ -602,6 +653,19 @@ function BonosTab({ me, activePurchaseFor, purchases, bonos, events, bookings, o
               <h3>{bonoName(bonos, active.bonoId)}{active.trimestre && ' · Trimestre'}</h3>
               <p className="muted">Clases disponibles: <b>{active.classesTotal === null ? 'Ilimitadas' : `${active.classesTotal - active.classesUsed} de ${active.classesTotal}`}</b></p>
               <p className="muted">Válido hasta {fmtDate(new Date(active.expiryDate))}</p>
+              {activeFreezes.map(f => (
+                <p key={f.id} className="muted" style={{ marginTop: 6 }}>
+                  <span className={`pill ${f.status === 'confirmado' ? 'pill-lav' : 'pill-gray'}`}>{f.status === 'confirmado' ? 'Congelado' : 'Congelación pendiente de pago'}</span>{' '}
+                  del {fmtIso(f.startDate)} al {fmtIso(f.endDate)}
+                </p>
+              ))}
+              {hasPendingFreeze ? (
+                <p className="muted" style={{ marginTop: 6 }}>Cuando Beatriz confirme tu pago, tu bono quedará congelado y se alargará esos días.</p>
+              ) : (
+                <button className="linklike" style={{ marginTop: 8 }} onClick={() => onRequestFreeze(active)}>
+                  Congelar mi bono · {settings.freezePrice}€
+                </button>
+              )}
             </div>
           ) : pendiente ? (
             <div className="card"><h3>{bonoName(bonos, pendiente.bonoId)}{pendiente.trimestre && ' · Trimestre'}</h3><p className="muted">Solicitado, pendiente de confirmar el pago con Beatriz.</p></div>
@@ -724,7 +788,13 @@ function NotificationsCard({ studentId, toast }) {
 }
 
 function MyBonoCard({ me, purchases, activePurchaseFor, bonos }) {
-  const active = activePurchaseFor(me.id);
+  const { freezes } = useContext(FreezeContext);
+  const usable = activePurchaseFor(me.id);
+  const todayIso = isoDate(new Date());
+  const frozenNow = usable ? null : purchases.find(p => p.studentId === me.id && p.status === 'confirmado' && new Date(p.expiryDate) >= new Date()
+    && (p.classesTotal === null || p.classesUsed < p.classesTotal) && isFrozenOn(freezes, p.id, todayIso));
+  const active = usable || frozenNow;
+  const freezeNow = frozenNow ? freezesOf(freezes, frozenNow.id).find(f => f.status === 'confirmado' && f.startDate <= todayIso && todayIso <= f.endDate) : null;
   const pendiente = purchases.filter(p => p.studentId === me.id && p.status === 'pendiente')
     .sort((a, b) => new Date(b.purchaseDate) - new Date(a.purchaseDate))[0];
 
@@ -745,6 +815,7 @@ function MyBonoCard({ me, purchases, activePurchaseFor, bonos }) {
           <p className="muted">{bonoName(bonos, active.bonoId)}{active.trimestre && ' · Trimestre'}</p>
           <p className="muted">Clases disponibles: <b>{active.classesTotal === null ? 'Ilimitadas' : `${active.classesTotal - active.classesUsed} de ${active.classesTotal}`}</b></p>
           <p className="muted">Válido hasta {fmtDate(new Date(active.expiryDate))}</p>
+          {freezeNow && <p className="muted"><span className="pill pill-lav">Congelado</span> hasta el {fmtIso(freezeNow.endDate)}: no puedes usarlo estos días y su caducidad ya se ha alargado.</p>}
         </>
       ) : (
         <p className="muted">{bonoName(bonos, pendiente.bonoId)}{pendiente.trimestre && ' · Trimestre'} · solicitado, pendiente de confirmar el pago.</p>
@@ -938,7 +1009,7 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
           {purchases.filter(p => p.studentId === s.id).length === 0 ? <p className="muted">Sin bonos todavía.</p> :
             [...purchases].filter(p => p.studentId === s.id)
               .sort((a, b) => new Date(b.purchaseDate) - new Date(a.purchaseDate))
-              .map(p => <AdminBonoEditRow key={p.id} p={p} bonos={bonos} purchases={purchases} savePurchases={savePurchases} toast={toast} />)}
+              .map(p => <AdminBonoEditRow key={p.id} p={p} bonos={bonos} purchases={purchases} savePurchases={savePurchases} bookings={bookings} saveBookings={saveBookings} toast={toast} />)}
           <div className="sectionlabel">Sus reservas</div>
           {bookings.filter(b => b.studentId === s.id).length === 0 ? <p className="muted">Sin reservas todavía.</p> :
             [...bookings].filter(b => b.studentId === s.id)
@@ -974,7 +1045,12 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
   );
 }
 
-function AdminBonoEditRow({ p, bonos, purchases, savePurchases, toast }) {
+function AdminBonoEditRow({ p, bonos, purchases, savePurchases, bookings, saveBookings, toast }) {
+  const { freezes, saveFreezes } = useContext(FreezeContext);
+  const [freezing, setFreezing] = useState(false);
+  const [fStart, setFStart] = useState(() => isoDate(new Date()));
+  const [fEnd, setFEnd] = useState(() => isoDate(addDays(new Date(), 6)));
+  const [fReason, setFReason] = useState('');
   const [editing, setEditing] = useState(false);
   const [classesUsed, setClassesUsed] = useState(p.classesUsed || 0);
   const [classesTotal, setClassesTotal] = useState(p.classesTotal === null ? '' : p.classesTotal);
@@ -1000,8 +1076,37 @@ function AdminBonoEditRow({ p, bonos, purchases, savePurchases, toast }) {
     toast('Bono cancelado');
   }
 
+  // Congelación gratuita decidida por Beatriz (cualquier motivo, sin coste).
+  function freezeForFree() {
+    if (!fStart || !fEnd || fEnd < fStart) { toast('Revisa las fechas de la congelación'); return; }
+    if (freezesOf(freezes, p.id).some(f => fStart <= f.endDate && fEnd >= f.startDate)) { toast('Esas fechas se solapan con otra congelación de este bono'); return; }
+    const f = {
+      id: uid(), purchaseId: p.id, studentId: p.studentId, startDate: fStart, endDate: fEnd, days: freezeDays(fStart, fEnd),
+      price: 0, paymentMethod: 'admin', status: 'confirmado', by: 'admin', reason: fReason.trim(), createdAt: new Date().toISOString()
+    };
+    const { nextPurchases, nextBookings, cancelled } = applyFreeze(f, purchases, bookings);
+    const msg = `¿Congelar este bono del ${fmtIso(fStart)} al ${fmtIso(fEnd)} (${f.days} días, sin coste)? La caducidad se alargará ${f.days} días.`
+      + (cancelled > 0 ? `\n\nTiene ${cancelled} clase${cancelled === 1 ? '' : 's'} reservada${cancelled === 1 ? '' : 's'} con este bono en esas fechas: se cancelará${cancelled === 1 ? '' : 'n'} y se le devolverá${cancelled === 1 ? '' : 'n'} al bono.` : '');
+    if (!confirm(msg)) return;
+    savePurchases(nextPurchases);
+    if (cancelled > 0) saveBookings(nextBookings);
+    saveFreezes([...freezes, f]);
+    setFreezing(false);
+    setFReason('');
+    toast('Bono congelado');
+  }
+  function removeFreeze(f) {
+    if (!confirm(`¿Quitar la congelación del ${fmtIso(f.startDate)} al ${fmtIso(f.endDate)}?${f.status === 'confirmado' ? ` La caducidad del bono se acortará ${f.days} días.` : ''}`)) return;
+    saveFreezes(freezes.map(x => x.id === f.id ? { ...x, status: 'cancelado' } : x));
+    if (f.status === 'confirmado') {
+      savePurchases(purchases.map(x => x.id === p.id ? { ...x, expiryDate: addDays(new Date(x.expiryDate), -f.days).toISOString() } : x));
+    }
+    toast('Congelación quitada');
+  }
+
   const vencido = new Date(p.expiryDate) < new Date();
   const statusPill = p.status === 'confirmado' ? (vencido ? 'pill-gray' : 'pill-sage') : p.status === 'pendiente' ? 'pill-lav' : 'pill-gray';
+  const pFreezes = freezesOf(freezes, p.id);
 
   return (
     <div className="card" style={{ marginTop: 8 }}>
@@ -1034,8 +1139,30 @@ function AdminBonoEditRow({ p, bonos, purchases, savePurchases, toast }) {
         <>
           <p className="muted">{p.classesTotal === null ? 'Clases ilimitadas' : `${p.classesUsed || 0} de ${p.classesTotal} usadas`} · {p.price}€ · {PAYMENT_LABELS[p.paymentMethod] || p.paymentMethod}</p>
           <p className="muted">Comprado el {fmtDate(new Date(p.purchaseDate))} · Caduca el {fmtDate(new Date(p.expiryDate))}</p>
+          {pFreezes.map(f => (
+            <p key={f.id} className="muted" style={{ marginTop: 4 }}>
+              <span className={`pill ${f.status === 'confirmado' ? 'pill-lav' : 'pill-gray'}`}>{f.status === 'confirmado' ? 'Congelado' : 'Pendiente de pago'}</span>{' '}
+              {fmtIso(f.startDate)} → {fmtIso(f.endDate)} · {f.by === 'admin' ? `gratis${f.reason ? ` (${f.reason})` : ''}` : `${f.price}€`}{' '}
+              <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => removeFreeze(f)}>Quitar</button>
+            </p>
+          ))}
+          {freezing ? (
+            <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--line)' }}>
+              <label>Congelar desde</label>
+              <input type="date" value={fStart} onChange={e => setFStart(e.target.value)} />
+              <label>Hasta (incluido)</label>
+              <input type="date" value={fEnd} min={fStart} onChange={e => setFEnd(e.target.value)} />
+              <label>Motivo (opcional)</label>
+              <input type="text" value={fReason} onChange={e => setFReason(e.target.value)} placeholder="Ej. lesión, viaje, cierre del centro…" />
+              <div className="row" style={{ marginTop: 8 }}>
+                <button className="btn btn-sage btn-sm" onClick={freezeForFree}>Congelar sin coste</button>
+                <button className="linklike" onClick={() => setFreezing(false)}>Cancelar</button>
+              </div>
+            </div>
+          ) : null}
           <div className="row" style={{ marginTop: 8 }}>
             <button className="linklike" onClick={() => setEditing(true)}>Editar</button>
+            {p.status === 'confirmado' && !vencido && !freezing && <button className="linklike" onClick={() => setFreezing(true)}>Congelar (gratis)</button>}
             {p.status !== 'cancelado' && <button className="linklike" style={{ color: 'var(--danger)' }} onClick={cancelBono}>Cancelar bono</button>}
           </div>
         </>
@@ -1195,6 +1322,7 @@ function AdminEstadisticas({ students, purchases, bookings, bonos }) {
 
 function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, polls, savePolls, holidays, saveHolidays, events, saveEvents, scheduledPosts, saveScheduledPosts, classCancellations, saveClassCancellations, punctualClasses, savePunctualClasses, activePurchaseFor, adminToken, schedule, saveSchedule, bonos, saveBonos, settings, saveSettings, onAdminLogout, savePurchases, saveBookings, saveWallPosts, toast }) {
   const [alumnaSearch, setAlumnaSearch] = useState('');
+  const { freezes, saveFreezes } = useContext(FreezeContext);
   const tabs = [
     { id: 'estadisticas', label: 'Estadísticas' },
     { id: 'resumen', label: 'Resumen del día' },
@@ -1270,6 +1398,33 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
                 </div>
               );
             })}
+          <div className="sectionlabel">Congelaciones de bono por confirmar</div>
+          {freezes.filter(f => f.status === 'pendiente').length === 0 ? <div className="empty">No hay congelaciones pendientes de pago.</div> :
+            freezes.filter(f => f.status === 'pendiente').map(f => {
+              const s = students.find(x => x.id === f.studentId);
+              const p = purchases.find(x => x.id === f.purchaseId);
+              return (
+                <div className="card" key={f.id}>
+                  <h3>Congelar {p ? bonoName(bonos, p.bonoId) : 'bono'} <span className="pill pill-lav">{f.paymentMethod === 'redsys' ? 'Tarjeta' : 'Bizum'}</span></h3>
+                  <p className="muted">{s ? s.name : 'Alumna eliminada'} · {s ? s.phone : ''}</p>
+                  <p className="muted">Del {fmtIso(f.startDate)} al {fmtIso(f.endDate)} ({f.days} días) · {f.price}€</p>
+                  <div className="row" style={{ marginTop: 8 }}>
+                    <button className="btn btn-sage btn-sm" disabled={!p || p.status !== 'confirmado'} onClick={() => {
+                      const { nextPurchases, nextBookings, cancelled } = applyFreeze(f, purchases, bookings);
+                      savePurchases(nextPurchases);
+                      if (cancelled > 0) saveBookings(nextBookings);
+                      saveFreezes(freezes.map(x => x.id === f.id ? { ...x, status: 'confirmado' } : x));
+                      toast(cancelled > 0 ? `Congelación confirmada. Se han cancelado y devuelto ${cancelled} clase${cancelled === 1 ? '' : 's'} reservada${cancelled === 1 ? '' : 's'} en esas fechas.` : 'Congelación confirmada');
+                    }}>Marcar como pagada</button>
+                    <button className="btn btn-outline btn-sm" onClick={() => {
+                      if (!confirm(`¿Cancelar la congelación de ${s ? s.name : 'esta alumna'}?`)) return;
+                      saveFreezes(freezes.map(x => x.id === f.id ? { ...x, status: 'cancelado' } : x));
+                      toast('Congelación cancelada');
+                    }}>Cancelar</button>
+                  </div>
+                </div>
+              );
+            })}
           <div className="sectionlabel">Clases sueltas por confirmar</div>
           {bookings.filter(b => b.status === 'pendiente_pago').length === 0 ? <div className="empty">No hay clases sueltas pendientes de pago.</div> :
             bookings.filter(b => b.status === 'pendiente_pago').map(b => {
@@ -1311,6 +1466,9 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
                     <p className="muted">Clases: <b>{p.classesTotal === null ? 'Ilimitadas' : `${p.classesUsed || 0} de ${p.classesTotal} usadas`}</b></p>
                     <div className="row" style={{ marginTop: 8, alignItems: 'center' }}>
                       <span className={`pill ${vencido ? 'pill-gray' : 'pill-sage'}`}>{vencido ? 'Caducado' : `Válido hasta ${fmtDate(new Date(p.expiryDate))}`}</span>
+                      {freezesOf(freezes, p.id).filter(f => f.status === 'confirmado' && f.endDate >= isoDate(new Date())).map(f => (
+                        <span key={f.id} className="pill pill-lav">Congelado {fmtIso(f.startDate)} → {fmtIso(f.endDate)}</span>
+                      ))}
                       <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => {
                         if (!confirm(`¿Cancelar el bono ${bonoName(bonos, p.bonoId)} de ${s ? s.name : 'esta alumna'}? Dejará de estar activo.`)) return;
                         savePurchases(purchases.map(x => x.id === p.id ? { ...x, status: 'cancelado' } : x));
@@ -2417,6 +2575,7 @@ function AdminEventos({ events, saveEvents, bookings, students, adminToken, toas
 
 /* ---------------- MODALES ---------------- */
 function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases, bonos, me, pickProfile, activePurchaseFor, classCancellations, toast, onClose }) {
+  const { freezes } = useContext(FreezeContext);
   const settings = useContext(SettingsContext);
   const { day, cls, dateIso } = modal;
   // Evita reservas/pagos duplicados por doble tap o doble clic: el estado de
@@ -2505,7 +2664,9 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
                 <div className="t">Usar mi {bonoName(bonos, active.bonoId)}</div>
                 <div className="s">Clases {active.classesTotal === null ? 'ilimitadas' : `${active.classesTotal - active.classesUsed} restantes`}</div>
               </div>
-            ) : <p className="muted">No tienes un bono activo para esta fecha.</p>}
+            ) : purchases.some(p => p.studentId === me.id && p.status === 'confirmado' && isFrozenOn(freezes, p.id, dateIso))
+              ? <p className="muted">Tu bono está congelado en esta fecha, así que no puedes usarlo.</p>
+              : <p className="muted">No tienes un bono activo para esta fecha.</p>}
             <div className="optionbox" onClick={() => confirmBookingSueltaCard(me.id)}>
               <div className="t">Pagar con tarjeta ahora · {settings.claseSueltaPrice}€</div>
               <div className="s">Redirige a la pasarela de pago segura</div>
@@ -2772,6 +2933,84 @@ function EventModal({ modal, me, bookings, saveBookings, toast, onClose }) {
   );
 }
 
+function FreezeModal({ modal, me, bookings, toast, onClose }) {
+  const settings = useContext(SettingsContext);
+  const { freezes, saveFreezes } = useContext(FreezeContext);
+  const purchase = modal.purchase;
+  const maxDays = settings.freezeMaxDays || 30;
+  const todayIso = isoDate(new Date());
+  const options = Array.from(new Set([...[7, 14, 21, 30].filter(d => d <= maxDays), maxDays])).sort((a, b) => a - b);
+  const [startDate, setStartDate] = useState(todayIso);
+  const [days, setDays] = useState(options[0]);
+  const [paying, setPaying] = useState(false);
+  const submittingRef = useRef(false);
+
+  const endDate = startDate ? isoDate(addDays(new Date(`${startDate}T12:00:00`), days - 1)) : '';
+  let error = null;
+  if (!startDate || startDate < todayIso) error = 'Elige una fecha de inicio desde hoy en adelante.';
+  else if (new Date(purchase.expiryDate) < new Date(`${startDate}T00:00:00`)) error = 'Tu bono caduca antes de esa fecha.';
+  else if (freezesOf(freezes, purchase.id).some(f => startDate <= f.endDate && endDate >= f.startDate)) error = 'Esas fechas se solapan con otra congelación de este bono.';
+  else {
+    const clash = bookingsInFreeze(bookings, { studentId: me.id, purchaseId: purchase.id, startDate, endDate });
+    if (clash.length > 0) error = `Tienes ${clash.length} clase${clash.length === 1 ? '' : 's'} reservada${clash.length === 1 ? '' : 's'} con tu bono en esas fechas. Cancélala${clash.length === 1 ? '' : 's'} primero desde Perfil → Mis próximas clases.`;
+  }
+
+  function createFreeze(paymentMethod) {
+    const freeze = {
+      id: uid(), purchaseId: purchase.id, studentId: me.id, startDate, endDate, days,
+      price: settings.freezePrice, paymentMethod, status: 'pendiente', by: 'alumna', createdAt: new Date().toISOString()
+    };
+    saveFreezes([...freezes, freeze]);
+    return freeze;
+  }
+  async function handleCardPayment() {
+    if (submittingRef.current || error) return;
+    submittingRef.current = true;
+    setPaying(true);
+    const freeze = createFreeze('redsys');
+    try {
+      await payWithRedsys({ kind: 'freeze', itemId: freeze.id, studentId: me.id, amount: settings.freezePrice, concept: `Congelar bono (${days} días)` });
+    } catch (e) {
+      submittingRef.current = false;
+      setPaying(false);
+      toast('No se pudo iniciar el pago con tarjeta. Puedes pagar por Bizum.');
+    }
+  }
+  function handleBizum() {
+    if (submittingRef.current || error) return;
+    submittingRef.current = true;
+    createFreeze('bizum');
+    toast(`Congelación solicitada. Haz el Bizum al ${settings.bizumPhone} y Beatriz la confirmará`);
+    onClose();
+  }
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal-sheet">
+        <button className="modal-close" onClick={onClose}>×</button>
+        <h3>Congelar mi bono</h3>
+        <p className="muted">Si no vas a poder venir (lesión, viaje…), congela tu bono: durante esos días no podrás usarlo y su caducidad se alarga el mismo número de días. Coste: <b>{settings.freezePrice}€</b>.</p>
+        <label>Desde</label>
+        <input type="date" value={startDate} min={todayIso} onChange={e => setStartDate(e.target.value)} />
+        <label>Durante</label>
+        <select value={days} onChange={e => setDays(Number(e.target.value))}>
+          {options.map(d => <option key={d} value={d}>{d} días</option>)}
+        </select>
+        {endDate && <p className="muted" style={{ marginTop: 8 }}>Congelado del {fmtIso(startDate)} al {fmtIso(endDate)}. Tu bono caducará el {fmtDate(addDays(new Date(purchase.expiryDate), days))}.</p>}
+        {error ? <p className="muted" style={{ color: 'var(--danger)' }}>{error}</p> : (
+          <>
+            <button className="btn btn-primary" style={{ marginTop: 14 }} disabled={paying} onClick={handleCardPayment}>
+              {paying ? 'Redirigiendo a la pasarela…' : `Pagar con tarjeta ahora · ${settings.freezePrice}€`}
+            </button>
+            <p className="muted" style={{ textAlign: 'center', margin: '10px 0' }}>o</p>
+            <button className="btn btn-ghost" disabled={paying} onClick={handleBizum}>Pagar por Bizum al {settings.bizumPhone}</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ---------------- IMPORTAR ALUMNAS (Excel) ---------------- */
 const HOWFOUND_IMPORT_MAP = {
   'Recomendación': 'Recomendación de una amiga',
@@ -2912,7 +3151,9 @@ function AdminAjustes({ settings, saveSettings, adminToken, onAdminLogout, toast
     claseSueltaPrice: String(settings.claseSueltaPrice),
     bizumPhone: settings.bizumPhone,
     whatsappPhone: settings.whatsappPhone,
-    defaultCapacity: String(settings.defaultCapacity)
+    defaultCapacity: String(settings.defaultCapacity),
+    freezePrice: String(settings.freezePrice),
+    freezeMaxDays: String(settings.freezeMaxDays)
   });
   const [currentPin, setCurrentPin] = useState('');
   const [newPin, setNewPin] = useState('');
@@ -2924,7 +3165,9 @@ function AdminAjustes({ settings, saveSettings, adminToken, onAdminLogout, toast
       claseSueltaPrice: Number(form.claseSueltaPrice) || settings.claseSueltaPrice,
       bizumPhone: form.bizumPhone.trim(),
       whatsappPhone: form.whatsappPhone.trim(),
-      defaultCapacity: Number(form.defaultCapacity) || settings.defaultCapacity
+      defaultCapacity: Number(form.defaultCapacity) || settings.defaultCapacity,
+      freezePrice: Number(form.freezePrice) || settings.freezePrice,
+      freezeMaxDays: Math.round(Number(form.freezeMaxDays)) || settings.freezeMaxDays
     });
     toast('Ajustes guardados');
   }
@@ -2956,6 +3199,10 @@ function AdminAjustes({ settings, saveSettings, adminToken, onAdminLogout, toast
         <input type="text" value={form.whatsappPhone} onChange={e => setForm({ ...form, whatsappPhone: e.target.value })} />
         <label>Aforo por defecto de una clase</label>
         <input type="number" value={form.defaultCapacity} onChange={e => setForm({ ...form, defaultCapacity: e.target.value })} />
+        <label>Precio de congelar un bono (€) — Beatriz lo congela gratis cuando quiera</label>
+        <input type="number" min="1" value={form.freezePrice} onChange={e => setForm({ ...form, freezePrice: e.target.value })} />
+        <label>Máximo de días por congelación</label>
+        <input type="number" min="1" value={form.freezeMaxDays} onChange={e => setForm({ ...form, freezeMaxDays: e.target.value })} />
         <button className="btn btn-sage btn-sm" style={{ marginTop: 10 }} onClick={saveGeneral}>Guardar ajustes</button>
       </div>
 

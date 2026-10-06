@@ -4,7 +4,7 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
 
   const { kind, itemId, studentId, amount, concept } = req.body || {};
-  if (!['bono', 'suelta'].includes(kind) || !itemId || !studentId || !amount) {
+  if (!['bono', 'suelta', 'freeze'].includes(kind) || !itemId || !studentId || !amount) {
     return res.status(400).json({ error: 'Faltan datos para iniciar el pago' });
   }
 

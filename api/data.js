@@ -6,7 +6,7 @@ const redis = Redis.fromEnv();
 
 // Solo se permite leer/escribir estas claves compartidas.
 // Evita que alguien use el endpoint para escribir cualquier cosa en tu Redis.
-const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts', 'schedule', 'bonos', 'settings', 'polls', 'holidays', 'events', 'scheduledPosts', 'classCancellations', 'punctualClasses'];
+const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts', 'schedule', 'bonos', 'settings', 'polls', 'holidays', 'events', 'scheduledPosts', 'classCancellations', 'punctualClasses', 'freezes'];
 
 // 'students' contiene datos personales de todas las alumnas: ni lectura ni
 // escritura completas sin ser admin (las alumnas usan api/student-profile.js
@@ -211,6 +211,36 @@ function isPollChangeAllowed(diff) {
   return (before.options || []).some(o => o.id === newVote.optionId);
 }
 
+// Congelación de bono. Sin token, una alumna solo puede SOLICITAR (estado
+// 'pendiente') la congelación de su propio bono confirmado, con el precio y
+// la duración máxima que marcan los ajustes. Confirmarla (tras pagar) la
+// hacen Beatriz o la pasarela de pago; nunca la alumna.
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+function daysInclusive(startIso, endIso) {
+  return Math.round((Date.parse(`${endIso}T00:00:00Z`) - Date.parse(`${startIso}T00:00:00Z`)) / 86400000) + 1;
+}
+function isFreezeChangeAllowed(diff, current, purchases, settings) {
+  if (!diff) return false;
+  if (diff.type === 'noop') return true;
+  if (diff.type !== 'append') return false;
+  const f = diff.item || {};
+  if (f.status !== 'pendiente' || f.by !== 'alumna' || !['redsys', 'bizum'].includes(f.paymentMethod)) return false;
+  if (!DATE_RE.test(f.startDate || '') || !DATE_RE.test(f.endDate || '')) return false;
+
+  const maxDays = Number(settings?.freezeMaxDays) || 30;
+  const price = settings?.freezePrice === undefined ? 3 : Number(settings.freezePrice);
+  const days = daysInclusive(f.startDate, f.endDate);
+  if (!Number.isInteger(days) || days < 1 || days > maxDays || f.days !== days) return false;
+  if (Number(f.price) !== price) return false;
+  if (f.startDate < madridNowString().slice(0, 10)) return false;
+
+  const purchase = (purchases || []).find(p => p.id === f.purchaseId && p.studentId === f.studentId && p.status === 'confirmado');
+  if (!purchase || new Date(purchase.expiryDate) < new Date(`${f.startDate}T00:00:00`)) return false;
+
+  const cur = Array.isArray(current) ? current : [];
+  return !cur.some(o => o.purchaseId === f.purchaseId && o.status !== 'cancelado' && (o.status === 'pendiente' || (f.startDate <= o.endDate && f.endDate >= o.startDate)));
+}
+
 function isPurchaseChangeAllowed(diff) {
   if (!diff) return false;
   if (diff.type === 'noop') return true;
@@ -394,13 +424,17 @@ export default async function handler(req, res) {
     }
     try {
       const { value } = req.body || {};
-      const needsDiff = key === 'bookings' || key === 'purchases' || key === 'wallPosts' || key === 'polls' || key === 'holidays' || key === 'events';
+      const needsDiff = key === 'bookings' || key === 'purchases' || key === 'wallPosts' || key === 'polls' || key === 'holidays' || key === 'events' || key === 'freezes';
       const current = needsDiff ? await redis.get(key) : undefined;
       const diff = needsDiff ? diffSingleChange(current, value) : null;
 
-      if (!admin && (key === 'bookings' || key === 'purchases' || key === 'polls')) {
+      if (!admin && (key === 'bookings' || key === 'purchases' || key === 'polls' || key === 'freezes')) {
         let allowed;
-        if (key === 'bookings') {
+        if (key === 'freezes') {
+          const purchases = await redis.get('purchases');
+          const settings = await redis.get('settings');
+          allowed = isFreezeChangeAllowed(diff, current, purchases, settings);
+        } else if (key === 'bookings') {
           const schedule = await redis.get('schedule');
           const holidays = await redis.get('holidays');
           const events = await redis.get('events');

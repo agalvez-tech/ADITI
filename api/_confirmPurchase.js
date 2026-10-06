@@ -29,6 +29,20 @@ export async function confirmPaymentFromParams(params) {
         const student = students.find(s => s.id === confirmed.studentId);
         await notifyBonoConfirmado(student, confirmed);
       }
+    } else if (kind === 'freeze') {
+      // Congelación de bono pagada: se confirma y se alarga la caducidad del
+      // bono los días congelados. Solo si seguía pendiente, porque este
+      // proceso puede ejecutarse dos veces (aviso de Redsys + retorno del
+      // navegador) y no debe alargar el bono dos veces.
+      const freezes = (await redis.get('freezes')) || [];
+      const freeze = freezes.find(f => f.id === itemId);
+      if (freeze && freeze.status === 'pendiente') {
+        await redis.set('freezes', freezes.map(f => f.id === itemId ? { ...f, status: 'confirmado', paymentMethod: 'redsys' } : f));
+        const purchases = (await redis.get('purchases')) || [];
+        await redis.set('purchases', purchases.map(p => p.id === freeze.purchaseId
+          ? { ...p, expiryDate: new Date(new Date(p.expiryDate).getTime() + freeze.days * 24 * 60 * 60 * 1000).toISOString() }
+          : p));
+      }
     } else if (kind === 'suelta') {
       const bookings = (await redis.get('bookings')) || [];
       let confirmed = null;
