@@ -936,8 +936,29 @@ function PerfilTab({ me, pickProfile, clearProfile, purchases, savePurchases, bo
 }
 
 /* ---------------- ADMIN ---------------- */
-function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purchases, savePurchases, bookings, saveBookings, toast }) {
+// Clases que se pueden apuntar a una alumna en una fecha: las del horario
+// semanal, las clases sueltas de ese día y los eventos especiales.
+function classesForDate(dateIso, { schedule, punctualClasses, events, classCancellations }) {
+  if (!dateIso) return [];
+  const dayName = dayNameForDate(new Date(`${dateIso}T12:00:00`));
+  const all = [
+    ...((schedule || {})[dayName] || []),
+    ...(punctualClasses || []).filter(p => p.date === dateIso),
+    ...(events || []).filter(e => e.date === dateIso && e.active !== false).map(e => ({ time: e.time, name: e.name, capacity: e.capacity }))
+  ].filter(c => !isClassCancelled(classCancellations, dateIso, c.time, c.name));
+  const seen = new Set();
+  return all.filter(c => { const k = `${c.time}|${c.name}`; if (seen.has(k)) return false; seen.add(k); return true; })
+    .sort((a, b) => a.time.localeCompare(b.time));
+}
+
+function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purchases, savePurchases, bookings, saveBookings, classInfo, toast }) {
+  const settings = useContext(SettingsContext);
   const [editing, setEditing] = useState(false);
+  const [assigningSuelta, setAssigningSuelta] = useState(false);
+  const [sueltaDate, setSueltaDate] = useState(() => isoDate(new Date()));
+  const [sueltaKey, setSueltaKey] = useState('');
+  const [sueltaMethod, setSueltaMethod] = useState('efectivo');
+  const [sueltaPrice, setSueltaPrice] = useState('');
   const [assigningBono, setAssigningBono] = useState(false);
   const [showDetail, setShowDetail] = useState(false);
   const [bonoId, setBonoId] = useState('');
@@ -978,6 +999,29 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
     toast(`${b.name} dado de alta (${payMethod}) para ${s.name}`);
   }
 
+  const sueltaOptions = classesForDate(sueltaDate, classInfo || {});
+  function handleAssignSuelta() {
+    const cls = sueltaOptions.find(c => `${c.time}|${c.name}` === sueltaKey);
+    if (!cls) { toast('Elige la clase'); return; }
+    if (bookings.some(b => b.studentId === s.id && b.date === sueltaDate && b.time === cls.time && b.className === cls.name && b.status !== 'cancelada')) {
+      toast(`${s.name} ya está apuntada a esa clase`); return;
+    }
+    const cap = cls.capacity || settings.defaultCapacity;
+    const occupied = bookings.filter(b => b.date === sueltaDate && b.time === cls.time && b.className === cls.name && occupiesSpot(b.status)).length;
+    if (occupied >= cap && !confirm(`${cls.name} (${cls.time}) ya está completa (${occupied}/${cap}). ¿Apuntarla igualmente?`)) return;
+    const booking = {
+      id: uid(), studentId: s.id, day: dayNameForDate(new Date(`${sueltaDate}T12:00:00`)), time: cls.time, className: cls.name,
+      date: sueltaDate, status: 'confirmada', paymentMethod: sueltaMethod,
+      price: sueltaPrice.trim() === '' ? settings.claseSueltaPrice : (Number(sueltaPrice) || 0),
+      createdAt: new Date().toISOString()
+    };
+    saveBookings([...bookings, booking]);
+    setAssigningSuelta(false);
+    setSueltaKey('');
+    setSueltaPrice('');
+    toast(`Clase suelta de ${cls.name} añadida a ${s.name} (${sueltaMethod})`);
+  }
+
   if (editing) {
     return (
       <div className="card">
@@ -999,7 +1043,8 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
       </div>
       <div className="row" style={{ marginTop: 10 }}>
         <button className="linklike" onClick={() => setEditing(true)}>Editar</button>
-        <button className="linklike" onClick={() => setAssigningBono(!assigningBono)}>{assigningBono ? 'Cancelar' : '+ Bono en efectivo'}</button>
+        <button className="linklike" onClick={() => { setAssigningBono(!assigningBono); setAssigningSuelta(false); }}>{assigningBono ? 'Cancelar' : '+ Bono en efectivo'}</button>
+        <button className="linklike" onClick={() => { setAssigningSuelta(!assigningSuelta); setAssigningBono(false); }}>{assigningSuelta ? 'Cancelar' : '+ Clase suelta'}</button>
         <button className="linklike" onClick={() => setShowDetail(!showDetail)}>{showDetail ? 'Ocultar bonos y reservas' : 'Ver bonos y reservas'}</button>
         <button className="linklike" style={{ color: 'var(--danger)' }} onClick={handleDelete}>Eliminar</button>
       </div>
@@ -1015,6 +1060,26 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
             [...bookings].filter(b => b.studentId === s.id)
               .sort((a, b) => new Date(b.date) - new Date(a.date))
               .map(b => <AdminReservaEditRow key={b.id} b={b} bookings={bookings} saveBookings={saveBookings} purchases={purchases} savePurchases={savePurchases} toast={toast} />)}
+        </div>
+      )}
+      {assigningSuelta && (
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
+          <label>Día de la clase</label>
+          <input type="date" value={sueltaDate} onChange={e => { setSueltaDate(e.target.value); setSueltaKey(''); }} />
+          <label>Clase</label>
+          <select value={sueltaKey} onChange={e => setSueltaKey(e.target.value)}>
+            <option value="">{sueltaOptions.length === 0 ? 'No hay clases ese día' : 'Selecciona una clase'}</option>
+            {sueltaOptions.map(c => <option key={`${c.time}|${c.name}`} value={`${c.time}|${c.name}`}>{c.time} · {c.name}</option>)}
+          </select>
+          <label>Método de pago</label>
+          <select value={sueltaMethod} onChange={e => setSueltaMethod(e.target.value)}>
+            <option value="efectivo">Efectivo</option>
+            <option value="transferencia">Transferencia</option>
+            <option value="bizum">Bizum</option>
+          </select>
+          <label>Precio (€)</label>
+          <input type="number" min="0" value={sueltaPrice} onChange={e => setSueltaPrice(e.target.value)} placeholder={`${settings.claseSueltaPrice} (precio de clase suelta)`} />
+          <button className="btn btn-sage btn-sm" style={{ marginTop: 10 }} onClick={handleAssignSuelta}>Confirmar clase suelta</button>
         </div>
       )}
       {assigningBono && (
@@ -1367,7 +1432,8 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
               <AdminAlumnaCard key={s.id} s={s} students={students} saveStudents={saveStudents}
                 active={activePurchaseFor(s.id)} total={bookings.filter(b => b.studentId === s.id).length}
                 bonos={bonos} purchases={purchases} savePurchases={savePurchases}
-                bookings={bookings} saveBookings={saveBookings} toast={toast} />
+                bookings={bookings} saveBookings={saveBookings} toast={toast}
+                classInfo={{ schedule, punctualClasses, events, classCancellations }} />
             ));
           })()}
         </>
