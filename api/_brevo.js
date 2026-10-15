@@ -153,9 +153,9 @@ export async function broadcastEvent(students, event) {
   const emails = (students || []).map(s => s.email).filter(Boolean);
   const imageHtml = event.imageUrl ? `<p><img src="${event.imageUrl}" alt="" style="max-width:100%;border-radius:8px;"></p>` : '';
   const html = `${imageHtml}<p>Nuevo evento especial: <b>${event.name}</b></p>
-    <p>${dateCap} a las ${event.time} · ${event.price}€</p>
+    <p>${dateCap} a las ${event.time} · ${Number(event.price) ? `${event.price}€` : 'Gratis'}</p>
     ${event.description ? `<p>${event.description}</p>` : ''}
-    <p>Entra en la app para apuntarte y pagar tu plaza — son limitadas.</p>
+    <p>Entra en la app para apuntarte${Number(event.price) ? ' y pagar tu plaza' : ''} — las plazas son limitadas.</p>
     <p>— Aditi Functional Yoga</p>`;
   await Promise.allSettled(
     emails.map(email => sendEmail(email, `Aditi: nuevo evento — ${event.name}`, html))

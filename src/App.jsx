@@ -142,6 +142,8 @@ function applyFreeze(freeze, purchases, bookings) {
 
 // Cancelar con menos de estas horas de antelación no devuelve la clase al bono.
 const LATE_CANCEL_HOURS = 3;
+function isFreeEvent(ev) { return !Number(ev.price); }
+function eventPriceLabel(ev) { return isFreeEvent(ev) ? 'Gratis' : `${ev.price}€`; }
 function classDateTime(b) { return new Date(`${b.date}T${b.time}`); }
 function isLateCancel(b) { return (classDateTime(b) - new Date()) / 3600000 < LATE_CANCEL_HOURS; }
 
@@ -629,7 +631,7 @@ function BonosTab({ me, activePurchaseFor, purchases, bonos, events, bookings, o
                     {ev.description && <p className="muted">{ev.description}</p>}
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <div className="serif" style={{ fontSize: 17, fontWeight: 600, color: 'var(--plum)' }}>{ev.price}€</div>
+                    <div className="serif" style={{ fontSize: 17, fontWeight: 600, color: 'var(--plum)' }}>{eventPriceLabel(ev)}</div>
                     <span className={`pill ${already ? 'pill-sage' : full ? 'pill-gray' : 'pill-lav'}`} style={{ marginTop: 6, display: 'inline-block' }}>
                       {already ? 'Ya apuntada' : full ? 'Completo' : 'Apuntarme'}
                     </span>
@@ -1299,7 +1301,7 @@ function AdminReservaEditRow({ b, bookings, saveBookings, purchases, savePurchas
   );
 }
 
-const PAYMENT_LABELS = { redsys: 'Tarjeta', bizum: 'Bizum', efectivo: 'Efectivo', transferencia: 'Transferencia' };
+const PAYMENT_LABELS = { redsys: 'Tarjeta', bizum: 'Bizum', efectivo: 'Efectivo', transferencia: 'Transferencia', gratis: 'Gratis' };
 
 function AdminEstadisticas({ students, purchases, bookings, bonos }) {
   const [period, setPeriod] = useState('mes');
@@ -1552,7 +1554,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
                 const s = students.find(x => x.id === b.studentId);
                 return (
                   <div className="card" key={b.id}>
-                    <h3>{b.className} <span className="pill pill-lav">{b.paymentMethod === 'redsys' ? 'Tarjeta' : 'Bizum'}</span></h3>
+                    <h3>{b.className} <span className="pill pill-lav">{PAYMENT_LABELS[b.paymentMethod] || 'Bizum'}</span></h3>
                     <p className="muted">{s ? s.name : 'Alumna eliminada'} · {fmtDate(new Date(b.date))} {b.time}</p>
                     <button className="linklike" style={{ color: 'var(--danger)', marginTop: 6 }} onClick={() => {
                       if (!confirm(`¿Cancelar esta clase de ${s ? s.name : 'esta alumna'}?`)) return;
@@ -2532,10 +2534,10 @@ function AdminEventos({ events, saveEvents, bookings, students, adminToken, toas
   }
 
   function publish() {
-    if (!name.trim() || !date || !time || !price) { toast('Rellena al menos nombre, fecha, hora y precio'); return; }
+    if (!name.trim() || !date || !time) { toast('Rellena al menos nombre, fecha y hora'); return; }
     const event = {
       id: uid(), name: name.trim(), description: description.trim(),
-      date, time, price: Number(price), capacity: capacity.trim() === '' ? settings.defaultCapacity : Number(capacity),
+      date, time, price: Number(price) || 0, capacity: capacity.trim() === '' ? settings.defaultCapacity : Number(capacity),
       imageUrl: imageUrl || null, active: true, createdAt: new Date().toISOString()
     };
     saveEvents([...events, event]);
@@ -2578,8 +2580,8 @@ function AdminEventos({ events, saveEvents, bookings, students, adminToken, toas
             </div>
             <div className="row">
               <div style={{ flex: 1 }}>
-                <label>Precio (€)</label>
-                <input type="number" value={price} onChange={e => setPrice(e.target.value)} placeholder="35" />
+                <label>Precio (€) — vacío si es gratis</label>
+                <input type="number" min="0" value={price} onChange={e => setPrice(e.target.value)} placeholder="Gratis" />
               </div>
               <div style={{ flex: 1 }}>
                 <label>Aforo</label>
@@ -2617,7 +2619,7 @@ function AdminEventos({ events, saveEvents, bookings, students, adminToken, toas
               <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
                   <h3 style={{ margin: 0 }}>{ev.name}</h3>
-                  <p className="muted">{fmtDate(new Date(`${ev.date}T12:00:00`))} · {ev.time} · {ev.price}€</p>
+                  <p className="muted">{fmtDate(new Date(`${ev.date}T12:00:00`))} · {ev.time} · {eventPriceLabel(ev)}</p>
                 </div>
                 <span className={`pill ${past ? 'pill-gray' : closed ? 'pill-gray' : 'pill-sage'}`}>{past ? 'Pasado' : closed ? 'Cerrado' : 'Abierto'}</span>
               </div>
@@ -2963,6 +2965,17 @@ function EventModal({ modal, me, bookings, saveBookings, toast, onClose }) {
       toast('No se pudo iniciar el pago con tarjeta. Puedes pagar por Bizum.');
     }
   }
+  function handleFree() {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    const booking = {
+      id: uid(), studentId: me.id, day: dayNameForDate(new Date(`${ev.date}T12:00:00`)), time: ev.time, className: ev.name,
+      date: ev.date, status: 'confirmada', paymentMethod: 'gratis', price: 0, eventId: ev.id, createdAt: new Date().toISOString()
+    };
+    saveBookings([...bookings, booking]);
+    toast(`¡Apuntada a ${ev.name}!`);
+    onClose();
+  }
   function handleBizum() {
     if (submittingRef.current) return;
     submittingRef.current = true;
@@ -2976,7 +2989,7 @@ function EventModal({ modal, me, bookings, saveBookings, toast, onClose }) {
       <div className="modal-sheet">
         <button className="modal-close" onClick={onClose}>×</button>
         <h3>{ev.name}</h3>
-        <p className="muted">{fmtDate(new Date(`${ev.date}T12:00:00`))} · {ev.time} · <b>{ev.price}€</b></p>
+        <p className="muted">{fmtDate(new Date(`${ev.date}T12:00:00`))} · {ev.time} · <b>{eventPriceLabel(ev)}</b></p>
         {ev.description && <p className="muted">{ev.description}</p>}
         <hr className="sep" />
         {already ? (
@@ -2985,6 +2998,8 @@ function EventModal({ modal, me, bookings, saveBookings, toast, onClose }) {
           <p className="muted">Este evento ya ha pasado.</p>
         ) : full ? (
           <p className="muted">Este evento ya está completo (máximo {capacity} plazas).</p>
+        ) : isFreeEvent(ev) ? (
+          <button className="btn btn-primary" onClick={handleFree}>Apuntarme gratis</button>
         ) : (
           <>
             <button className="btn btn-primary" disabled={paying} onClick={handleCardPayment}>

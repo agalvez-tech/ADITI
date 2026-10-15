@@ -144,7 +144,11 @@ function isBookingChangeAllowed(diff, current, schedule, holidays, events, class
   const item = diff.item || {};
   // Solo altas nuevas: pendiente de pago (bizum/tarjeta), confirmada por bono
   // propio, o apuntarse una misma a la lista de espera de una clase completa.
-  const validNew = item.status === 'pendiente_pago' || (item.status === 'confirmada' && item.paymentMethod === 'bono') || item.status === 'en_espera';
+  // También se admite apuntarse directamente (sin pago) a un evento especial
+  // que Beatriz ha creado gratuito y sigue abierto.
+  const freeEvent = eventFor(events, item);
+  const isFreeEventSignup = item.status === 'confirmada' && item.paymentMethod === 'gratis' && !!freeEvent && !Number(freeEvent.price) && freeEvent.active !== false;
+  const validNew = item.status === 'pendiente_pago' || (item.status === 'confirmada' && item.paymentMethod === 'bono') || item.status === 'en_espera' || isFreeEventSignup;
   if (!validNew) return false;
 
   // Día marcado como festivo por Beatriz: no se admiten reservas nuevas,
