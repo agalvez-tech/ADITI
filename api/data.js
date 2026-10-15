@@ -6,7 +6,7 @@ const redis = Redis.fromEnv();
 
 // Solo se permite leer/escribir estas claves compartidas.
 // Evita que alguien use el endpoint para escribir cualquier cosa en tu Redis.
-const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts', 'schedule', 'bonos', 'settings', 'polls', 'holidays', 'events', 'scheduledPosts', 'classCancellations', 'punctualClasses', 'freezes'];
+const ALLOWED_KEYS = ['students', 'bookings', 'purchases', 'wallPosts', 'schedule', 'bonos', 'settings', 'polls', 'holidays', 'events', 'scheduledPosts', 'classCancellations', 'punctualClasses', 'freezes', 'resources'];
 
 // 'students' contiene datos personales de todas las alumnas: ni lectura ni
 // escritura completas sin ser admin (las alumnas usan api/student-profile.js
@@ -22,7 +22,7 @@ const ADMIN_ONLY_READ_KEYS = ['students', 'scheduledPosts'];
 // solo día, sin tocar el horario semanal) y 'punctualClasses' (clases
 // sueltas añadidas para un único día, sin duplicarse el resto de semanas)
 // los lee cualquier alumna, pero solo Beatriz los edita.
-const ADMIN_ONLY_WRITE_KEYS = ['students', 'wallPosts', 'schedule', 'bonos', 'settings', 'holidays', 'events', 'scheduledPosts', 'classCancellations', 'punctualClasses'];
+const ADMIN_ONLY_WRITE_KEYS = ['students', 'wallPosts', 'schedule', 'bonos', 'settings', 'holidays', 'events', 'scheduledPosts', 'classCancellations', 'punctualClasses', 'resources'];
 
 // Para 'bookings' y 'purchases', las alumnas sí necesitan poder crear su propia
 // reserva/compra sin ser admin. Sin token, solo se permite un cambio mínimo y

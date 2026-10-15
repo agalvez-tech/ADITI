@@ -69,6 +69,23 @@ const DEFAULT_BONOS = [
 const DEFAULT_SETTINGS = { claseSueltaPrice: 20, bizumPhone: '691750534', whatsappPhone: '34652689928', defaultCapacity: 8, freezePrice: 3, freezeMaxDays: 30 };
 const SettingsContext = React.createContext(DEFAULT_SETTINGS);
 const FreezeContext = React.createContext({ freezes: [], saveFreezes: () => {} });
+
+// Consejos e información: guías, música y documentos que Beatriz comparte.
+// Mientras no haya nada guardado se muestra la guía de alimentación.
+const RESOURCE_TYPES = {
+  pdf: { label: 'PDF', ic: '📄', action: 'Abrir' },
+  documento: { label: 'Documento', ic: '📝', action: 'Abrir' },
+  audio: { label: 'Canción', ic: '🎵', action: 'Escuchar' },
+  video: { label: 'Vídeo', ic: '🎬', action: 'Ver' },
+  enlace: { label: 'Enlace', ic: '🔗', action: 'Abrir' }
+};
+const DEFAULT_RESOURCES = [
+  {
+    id: 'guia-alimentacion', title: 'Guía de alimentación, proteína y salud', description: 'Guía de Áditi con pautas de alimentación, proteína y salud.',
+    type: 'pdf', category: 'Alimentación y salud', url: '/recursos/guia-alimentacion-proteina-salud.pdf'
+  }
+];
+function isSafeUrl(u) { return /^https?:\/\//i.test(u || '') || ((u || '').startsWith('/') && !(u || '').startsWith('//')); }
 function bonoTrimestre(b) {
   if (!b || !b.trimestrePrice) return null;
   return { price: b.trimestrePrice, ahorro: b.price * 3 - b.trimestrePrice };
@@ -195,6 +212,7 @@ export default function App() {
   const [classCancellations, setClassCancellations] = useState([]);
   const [punctualClasses, setPunctualClasses] = useState([]);
   const [freezes, setFreezes] = useState([]);
+  const [resources, setResources] = useState(DEFAULT_RESOURCES);
   const [schedule, setSchedule] = useState(DEFAULT_SCHEDULE);
   const [bonos, setBonos] = useState(DEFAULT_BONOS);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -218,8 +236,8 @@ export default function App() {
         isAdmin ? getData('students', adminToken) : Promise.resolve(null),
         isAdmin ? getData('scheduledPosts', adminToken) : Promise.resolve(null),
         getData('bookings'), getData('purchases'), getData('wallPosts'), getData('polls'),
-        getData('schedule'), getData('bonos'), getData('settings'), getData('holidays'), getData('events'), getData('classCancellations'), getData('punctualClasses'), getData('freezes')
-      ]).then(([s, sp, b, p, w, pl, sch, bo, cfg, hol, ev, cc, pc, fz]) => {
+        getData('schedule'), getData('bonos'), getData('settings'), getData('holidays'), getData('events'), getData('classCancellations'), getData('punctualClasses'), getData('freezes'), getData('resources')
+      ]).then(([s, sp, b, p, w, pl, sch, bo, cfg, hol, ev, cc, pc, fz, rs]) => {
         if (cancelled) return;
         if (isAdmin) setStudents(s || []);
         if (isAdmin) setScheduledPosts(sp || []);
@@ -232,6 +250,7 @@ export default function App() {
         setClassCancellations(cc || []);
         setPunctualClasses(pc || []);
         setFreezes(fz || []);
+        if (rs) setResources(rs);
         if (sch) setSchedule(sch);
         if (bo) setBonos(bo);
         if (cfg) setSettings({ ...DEFAULT_SETTINGS, ...cfg });
@@ -271,6 +290,7 @@ export default function App() {
   function saveClassCancellations(next) { setClassCancellations(next); setData('classCancellations', next, adminToken); }
   function savePunctualClasses(next) { setPunctualClasses(next); setData('punctualClasses', next, adminToken); }
   function saveFreezes(next) { setFreezes(next); setData('freezes', next, adminToken); }
+  function saveResources(next) { setResources(next); setData('resources', next, adminToken); }
   function saveSchedule(next) { setSchedule(next); setData('schedule', next, adminToken); }
   function saveBonos(next) { setBonos(next); setData('bonos', next, adminToken); }
   function saveSettings(next) { setSettings(next); setData('settings', next, adminToken); }
@@ -327,6 +347,8 @@ export default function App() {
               setModal({ type: 'event', event });
             }}
             onRequestFreeze={(purchase) => setModal({ type: 'freeze', purchase })} />
+        ) : tab === 'info' ? (
+          <InfoTab resources={resources} />
         ) : tab === 'perfil' ? (
           <PerfilTab me={me} pickProfile={pickProfile} clearProfile={clearProfile} bonos={bonos}
             purchases={purchases} savePurchases={savePurchases} bookings={bookings} saveBookings={saveBookings} activePurchaseFor={activePurchaseFor}
@@ -339,6 +361,7 @@ export default function App() {
             scheduledPosts={scheduledPosts} saveScheduledPosts={saveScheduledPosts}
             classCancellations={classCancellations} saveClassCancellations={saveClassCancellations}
             punctualClasses={punctualClasses} savePunctualClasses={savePunctualClasses}
+            resources={resources} saveResources={saveResources}
             activePurchaseFor={activePurchaseFor} adminToken={adminToken}
             schedule={schedule} saveSchedule={saveSchedule} bonos={bonos} saveBonos={saveBonos}
             settings={settings} saveSettings={saveSettings} onAdminLogout={logoutAdmin}
@@ -381,6 +404,7 @@ function Header({ tab }) {
     muro: ['Muro', 'Novedades y avisos de Beatriz'],
     horario: ['Reservar clase', 'Elige día y hora'],
     bonos: ['Bonos y pagos', 'Gestiona tu bono mensual'],
+    info: ['Consejos e información', 'Guías, música y documentos de Beatriz'],
     perfil: ['Mi perfil', 'Tus datos en Aditi'],
     admin: ['Panel de Beatriz', 'Gestión de alumnas']
   };
@@ -410,6 +434,7 @@ function BottomNav({ tab, setTab, isAdmin }) {
     { id: 'muro', label: 'Muro', ic: '☀' },
     { id: 'horario', label: 'Reservar', ic: '📅' },
     { id: 'bonos', label: 'Bonos', ic: '💰' },
+    { id: 'info', label: 'Info', ic: '📖' },
     { id: 'perfil', label: 'Perfil', ic: '👤' }
   ];
   if (isAdmin) tabs.push({ id: 'admin', label: 'Beatriz', ic: '★' });
@@ -708,6 +733,40 @@ function BonosTab({ me, activePurchaseFor, purchases, bonos, events, bookings, o
         <p className="muted">Si no tienes bono, puedes reservar una clase individual por {settings.claseSueltaPrice}€ desde la pestaña Reservar.</p>
       </div>
       <p className="muted" style={{ textAlign: 'center', marginTop: 6 }}>Puedes pagar con tarjeta al momento o por Bizum al {settings.bizumPhone}. La app registra tu solicitud y, si pagas por Bizum, Beatriz la confirma en cuanto lo recibe.</p>
+    </>
+  );
+}
+
+/* ---------------- INFO (consejos y documentos) ---------------- */
+function InfoTab({ resources }) {
+  const visibles = (resources || []).filter(r => isSafeUrl(r.url));
+  if (visibles.length === 0) {
+    return <div className="empty"><div className="glyph">📖</div>Todavía no hay información.<br />Aquí encontrarás los consejos, guías y música de Beatriz.</div>;
+  }
+  const categories = [];
+  visibles.forEach(r => { const c = r.category || 'General'; if (!categories.includes(c)) categories.push(c); });
+  return (
+    <>
+      {categories.map(cat => (
+        <React.Fragment key={cat}>
+          <div className="sectionlabel">{cat}</div>
+          {visibles.filter(r => (r.category || 'General') === cat).map(r => {
+            const t = RESOURCE_TYPES[r.type] || RESOURCE_TYPES.enlace;
+            return (
+              <a key={r.id} className="card" href={r.url} target="_blank" rel="noopener noreferrer" style={{ display: 'block', textDecoration: 'none', color: 'inherit' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ fontSize: 28 }}>{t.ic}</div>
+                  <div style={{ flex: 1 }}>
+                    <h3 style={{ margin: 0 }}>{r.title}</h3>
+                    {r.description && <p className="muted" style={{ marginTop: 4 }}>{r.description}</p>}
+                  </div>
+                  <span className="pill pill-sage">{t.action}</span>
+                </div>
+              </a>
+            );
+          })}
+        </React.Fragment>
+      ))}
     </>
   );
 }
@@ -1387,7 +1446,7 @@ function AdminEstadisticas({ students, purchases, bookings, bonos }) {
   );
 }
 
-function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, polls, savePolls, holidays, saveHolidays, events, saveEvents, scheduledPosts, saveScheduledPosts, classCancellations, saveClassCancellations, punctualClasses, savePunctualClasses, activePurchaseFor, adminToken, schedule, saveSchedule, bonos, saveBonos, settings, saveSettings, onAdminLogout, savePurchases, saveBookings, saveWallPosts, toast }) {
+function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, polls, savePolls, holidays, saveHolidays, events, saveEvents, scheduledPosts, saveScheduledPosts, classCancellations, saveClassCancellations, punctualClasses, savePunctualClasses, resources, saveResources, activePurchaseFor, adminToken, schedule, saveSchedule, bonos, saveBonos, settings, saveSettings, onAdminLogout, savePurchases, saveBookings, saveWallPosts, toast }) {
   const [alumnaSearch, setAlumnaSearch] = useState('');
   const { freezes, saveFreezes } = useContext(FreezeContext);
   const tabs = [
@@ -1401,6 +1460,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
     { id: 'muro', label: 'Publicar en el muro' },
     { id: 'encuestas', label: 'Encuestas' },
     { id: 'eventos', label: 'Eventos especiales' },
+    { id: 'recursos', label: 'Consejos e información' },
     { id: 'importar', label: 'Importar alumnas' },
     { id: 'ajustes', label: 'Ajustes' }
   ];
@@ -1570,6 +1630,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
       {adminTab === 'gestionbonos' && <AdminBonos bonos={bonos} saveBonos={saveBonos} toast={toast} />}
       {adminTab === 'muro' && <AdminMuro wallPosts={wallPosts} saveWallPosts={saveWallPosts} scheduledPosts={scheduledPosts} saveScheduledPosts={saveScheduledPosts} adminToken={adminToken} toast={toast} />}
       {adminTab === 'encuestas' && <AdminEncuestas polls={polls} savePolls={savePolls} students={students} adminToken={adminToken} toast={toast} />}
+      {adminTab === 'recursos' && <AdminRecursos resources={resources} saveResources={saveResources} toast={toast} />}
       {adminTab === 'eventos' && <AdminEventos events={events} saveEvents={saveEvents} bookings={bookings} students={students} adminToken={adminToken} toast={toast} />}
       {adminTab === 'importar' && <AdminImport students={students} saveStudents={saveStudents} toast={toast} />}
       {adminTab === 'ajustes' && <AdminAjustes settings={settings} saveSettings={saveSettings} adminToken={adminToken} onAdminLogout={onAdminLogout} toast={toast} />}
@@ -2490,6 +2551,94 @@ function AdminEncuestas({ polls, savePolls, students, adminToken, toast }) {
             </div>
           );
         })}
+    </>
+  );
+}
+
+function AdminRecursos({ resources, saveResources, toast }) {
+  const empty = { title: '', description: '', type: 'pdf', category: '', url: '' };
+  const [editing, setEditing] = useState(null); // id en edición, o 'new'
+  const [form, setForm] = useState(empty);
+
+  function startAdd() { setEditing('new'); setForm(empty); }
+  function startEdit(r) { setEditing(r.id); setForm({ title: r.title, description: r.description || '', type: r.type || 'enlace', category: r.category || '', url: r.url }); }
+  function save() {
+    const url = form.url.trim();
+    if (!form.title.trim() || !url) { toast('Pon al menos un título y el enlace'); return; }
+    if (!isSafeUrl(url)) { toast('El enlace debe empezar por https://'); return; }
+    const data = { title: form.title.trim(), description: form.description.trim(), type: form.type, category: form.category.trim(), url };
+    if (editing === 'new') saveResources([...resources, { id: uid(), ...data, createdAt: new Date().toISOString() }]);
+    else saveResources(resources.map(r => r.id === editing ? { ...r, ...data } : r));
+    setEditing(null);
+    toast('Información guardada');
+  }
+  function remove(r) {
+    if (!confirm(`¿Quitar "${r.title}" de Consejos e información?`)) return;
+    saveResources(resources.filter(x => x.id !== r.id));
+  }
+  function move(i, dir) {
+    const j = i + dir;
+    if (j < 0 || j >= resources.length) return;
+    const next = [...resources];
+    [next[i], next[j]] = [next[j], next[i]];
+    saveResources(next);
+  }
+  const categories = [...new Set(resources.map(r => r.category).filter(Boolean))];
+
+  return (
+    <>
+      <div className="card">
+        {editing ? (
+          <>
+            <label>Título</label>
+            <input type="text" value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="Ej. Meditación para dormir" />
+            <label>Descripción (opcional)</label>
+            <textarea value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} placeholder="Para qué sirve o cuándo usarlo" />
+            <div className="row">
+              <div style={{ flex: 1 }}>
+                <label>Tipo</label>
+                <select value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}>
+                  {Object.entries(RESOURCE_TYPES).map(([k, t]) => <option key={k} value={k}>{t.ic} {t.label}</option>)}
+                </select>
+              </div>
+              <div style={{ flex: 1 }}>
+                <label>Sección</label>
+                <input type="text" list="aditi-res-cats" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })} placeholder="Ej. Música" />
+                <datalist id="aditi-res-cats">{categories.map(c => <option key={c} value={c} />)}</datalist>
+              </div>
+            </div>
+            <label>Enlace</label>
+            <input type="url" value={form.url} onChange={e => setForm({ ...form, url: e.target.value })} placeholder="https://…" />
+            <p className="muted" style={{ marginTop: 4 }}>Pega el enlace de Google Drive (Compartir → "Cualquiera con el enlace"), YouTube, Spotify o cualquier web.</p>
+            <div className="row" style={{ marginTop: 10 }}>
+              <button className="btn btn-sage btn-sm" onClick={save}>Guardar</button>
+              <button className="linklike" onClick={() => setEditing(null)}>Cancelar</button>
+            </div>
+          </>
+        ) : (
+          <button className="btn btn-primary" onClick={startAdd}>+ Añadir información</button>
+        )}
+      </div>
+      <div className="sectionlabel">Lo que ven las alumnas</div>
+      {resources.length === 0 ? <div className="empty">Todavía no hay nada publicado.</div> : resources.map((r, i) => {
+        const t = RESOURCE_TYPES[r.type] || RESOURCE_TYPES.enlace;
+        return (
+          <div className="card" key={r.id}>
+            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ margin: 0 }}>{t.ic} {r.title}</h3>
+              <span className="pill pill-lav">{r.category || 'General'}</span>
+            </div>
+            {r.description && <p className="muted">{r.description}</p>}
+            <p className="muted" style={{ fontSize: 12, wordBreak: 'break-all' }}>{r.url}</p>
+            <div className="row" style={{ marginTop: 8 }}>
+              <button className="linklike" onClick={() => startEdit(r)}>Editar</button>
+              <button className="linklike" disabled={i === 0} onClick={() => move(i, -1)}>↑ Subir</button>
+              <button className="linklike" disabled={i === resources.length - 1} onClick={() => move(i, 1)}>↓ Bajar</button>
+              <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => remove(r)}>Quitar</button>
+            </div>
+          </div>
+        );
+      })}
     </>
   );
 }
