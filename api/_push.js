@@ -30,17 +30,20 @@ export async function notifyStudentPush(studentId, title, body) {
   }
 }
 
-// Avisa a TODAS las suscripciones guardadas (equivalente a lo que hace
+// Avisa a las suscripciones guardadas (equivalente a lo que hace
 // /api/notify-wall). Se usa desde el propio servidor para publicaciones
 // programadas, que no pasan por ese endpoint porque nadie hace la petición.
-export async function notifyAllPush(title, body) {
+// Si se pasa onlyStudentIds, solo avisa a las de esas alumnas (las
+// suscripciones sin alumna asociada quedan fuera) y no toca las demás.
+export async function notifyAllPush(title, body, onlyStudentIds = null) {
   if (!process.env.VAPID_PUBLIC_KEY) return;
   ensureConfigured();
   try {
     const subs = (await redis.get('pushSubscriptions')) || [];
+    const targets = onlyStudentIds ? subs.filter(s => s.studentId && onlyStudentIds.has(s.studentId)) : subs;
     const payload = JSON.stringify({ title: `Áditi: ${title}`, body: body || '', url: '/' });
-    const stillValid = [];
-    await Promise.all(subs.map(async (entry) => {
+    const stillValid = subs.filter(s => !targets.includes(s));
+    await Promise.all(targets.map(async (entry) => {
       try {
         await webpush.sendNotification(entry.subscription, payload);
         stillValid.push(entry);

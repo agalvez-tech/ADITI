@@ -329,7 +329,7 @@ export default function App() {
         {loading ? (
           <div className="empty">Cargando…</div>
         ) : tab === 'muro' ? (
-          <MuroTab wallPosts={wallPosts} polls={polls} savePolls={savePolls} me={me} toast={toast} />
+          <MuroTab wallPosts={wallPosts} polls={polls} savePolls={savePolls} me={me} purchases={purchases} isAdmin={isAdmin} toast={toast} />
         ) : tab === 'horario' ? (
           <HorarioTab
             bookings={bookings} schedule={schedule} holidays={holidays} events={events} classCancellations={classCancellations} punctualClasses={punctualClasses} me={me}
@@ -450,8 +450,10 @@ function BottomNav({ tab, setTab, isAdmin }) {
 }
 
 /* ---------------- MURO ---------------- */
-function MuroTab({ wallPosts, polls, savePolls, me, toast }) {
-  const posts = [...wallPosts].sort((a, b) => new Date(b.date) - new Date(a.date));
+function MuroTab({ wallPosts, polls, savePolls, me, purchases, isAdmin, toast }) {
+  // Las publicaciones dirigidas solo a alumnas con bono activo no las ve el resto.
+  const canSeeActivos = isAdmin || (me && hasActiveBonoAt(purchases || [], me.id, new Date()));
+  const posts = wallPosts.filter(p => p.audience !== 'activos' || canSeeActivos).sort((a, b) => new Date(b.date) - new Date(a.date));
   const activePoll = me && (polls || []).find(p => p.active !== false && !(p.votes || []).some(v => v.studentId === me.id));
 
   return (
@@ -1628,10 +1630,10 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
       )}
       {adminTab === 'horarios' && <AdminHorarios schedule={schedule} saveSchedule={saveSchedule} holidays={holidays} saveHolidays={saveHolidays} punctualClasses={punctualClasses} savePunctualClasses={savePunctualClasses} toast={toast} />}
       {adminTab === 'gestionbonos' && <AdminBonos bonos={bonos} saveBonos={saveBonos} toast={toast} />}
-      {adminTab === 'muro' && <AdminMuro wallPosts={wallPosts} saveWallPosts={saveWallPosts} scheduledPosts={scheduledPosts} saveScheduledPosts={saveScheduledPosts} adminToken={adminToken} toast={toast} />}
+      {adminTab === 'muro' && <AdminMuro wallPosts={wallPosts} saveWallPosts={saveWallPosts} scheduledPosts={scheduledPosts} saveScheduledPosts={saveScheduledPosts} students={students} purchases={purchases} adminToken={adminToken} toast={toast} />}
       {adminTab === 'encuestas' && <AdminEncuestas polls={polls} savePolls={savePolls} students={students} adminToken={adminToken} toast={toast} />}
       {adminTab === 'recursos' && <AdminRecursos resources={resources} saveResources={saveResources} toast={toast} />}
-      {adminTab === 'eventos' && <AdminEventos events={events} saveEvents={saveEvents} bookings={bookings} students={students} adminToken={adminToken} toast={toast} />}
+      {adminTab === 'eventos' && <AdminEventos events={events} saveEvents={saveEvents} bookings={bookings} saveBookings={saveBookings} students={students} adminToken={adminToken} toast={toast} />}
       {adminTab === 'importar' && <AdminImport students={students} saveStudents={saveStudents} toast={toast} />}
       {adminTab === 'ajustes' && <AdminAjustes settings={settings} saveSettings={saveSettings} adminToken={adminToken} onAdminLogout={onAdminLogout} toast={toast} />}
     </>
@@ -2292,13 +2294,18 @@ function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, 
   );
 }
 
-function AdminMuro({ wallPosts, saveWallPosts, scheduledPosts, saveScheduledPosts, adminToken, toast }) {
+function AdminMuro({ wallPosts, saveWallPosts, scheduledPosts, saveScheduledPosts, students, purchases, adminToken, toast }) {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [imageUrl, setImageUrl] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
   const [uploading, setUploading] = useState(false);
-  const [publishAt, setPublishAt] = useState(''); // vacío = publicar ya; si no, valor de datetime-local
+  const [publishAt, setPublishAt] = useState(''); // valor de datetime-local cuando se programa
+  const [when, setWhen] = useState('ahora'); // 'ahora' | 'programar'
+  const [audience, setAudience] = useState(null); // 'todos' | 'activos'; Beatriz tiene que elegirlo siempre
+
+  const nTodos = students.length;
+  const nActivos = students.filter(s => hasActiveBonoAt(purchases, s.id, new Date())).length;
 
   async function handleImagePick(e) {
     const file = e.target.files[0];
@@ -2322,26 +2329,27 @@ function AdminMuro({ wallPosts, saveWallPosts, scheduledPosts, saveScheduledPost
   }
 
   function resetForm() {
-    setTitle(''); setContent(''); setImageUrl(null); setImagePreview(null); setPublishAt('');
+    setTitle(''); setContent(''); setImageUrl(null); setImagePreview(null); setPublishAt(''); setWhen('ahora'); setAudience(null);
   }
 
   function publish() {
     if (!title.trim() || !content.trim()) { toast('Escribe un título y un mensaje'); return; }
-    if (publishAt) {
+    if (!audience) { toast('Elige a quién se envía: a todas o solo a las alumnas con bono activo'); return; }
+    if (when === 'programar') {
       const publishDate = new Date(publishAt);
-      if (isNaN(publishDate.getTime()) || publishDate <= new Date()) { toast('Elige una fecha y hora futuras, o déjalo en blanco para publicar ya'); return; }
-      const scheduled = { id: uid(), title: title.trim(), content: content.trim(), imageUrl: imageUrl || null, publishAt: publishDate.toISOString(), createdAt: new Date().toISOString() };
+      if (!publishAt || isNaN(publishDate.getTime()) || publishDate <= new Date()) { toast('Elige una fecha y hora futuras para programarlo'); return; }
+      const scheduled = { id: uid(), title: title.trim(), content: content.trim(), imageUrl: imageUrl || null, audience, publishAt: publishDate.toISOString(), createdAt: new Date().toISOString() };
       saveScheduledPosts([...scheduledPosts, scheduled]);
       resetForm();
       toast(`Publicación programada para el ${fmtDate(publishDate)} a las ${publishDate.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}`);
     } else {
-      saveWallPosts([...wallPosts, { id: uid(), title: title.trim(), content: content.trim(), imageUrl: imageUrl || null, date: new Date().toISOString() }]);
+      saveWallPosts([...wallPosts, { id: uid(), title: title.trim(), content: content.trim(), imageUrl: imageUrl || null, audience, date: new Date().toISOString() }]);
       resetForm();
       toast('Publicado en el muro, avisando a las alumnas…');
       fetch('/api/notify-wall', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: title.trim(), body: content.trim() })
+        body: JSON.stringify({ title: title.trim(), body: content.trim(), audience })
       }).catch(() => {});
     }
   }
@@ -2359,7 +2367,13 @@ function AdminMuro({ wallPosts, saveWallPosts, scheduledPosts, saveScheduledPost
         <label>Título</label>
         <input type="text" value={title} onChange={e => setTitle(e.target.value)} placeholder="Ej. Clase especial de luna llena" />
         <label>Mensaje</label>
-        <textarea value={content} onChange={e => setContent(e.target.value)} placeholder="Escribe el aviso para todas las alumnas" />
+        <textarea value={content} onChange={e => setContent(e.target.value)} placeholder="Escribe el aviso" />
+        <label>¿A quién se envía?</label>
+        <div className="row" style={{ marginBottom: 6 }}>
+          <div className={`chip ${audience === 'todos' ? 'active' : ''}`} onClick={() => setAudience('todos')}>Todas las alumnas ({nTodos})</div>
+          <div className={`chip ${audience === 'activos' ? 'active' : ''}`} onClick={() => setAudience('activos')}>Solo con bono activo ({nActivos})</div>
+        </div>
+        <p className="muted" style={{ marginTop: 0 }}>{audience === 'activos' ? 'Solo las alumnas con un bono vigente verán la publicación y recibirán el aviso.' : audience === 'todos' ? 'Todas las alumnas verán la publicación y recibirán el aviso.' : 'Elige un grupo para poder publicar.'}</p>
         <label>Foto (opcional)</label>
         {imagePreview ? (
           <div style={{ position: 'relative', marginTop: 6 }}>
@@ -2370,11 +2384,19 @@ function AdminMuro({ wallPosts, saveWallPosts, scheduledPosts, saveScheduledPost
         ) : (
           <input type="file" accept="image/*" onChange={handleImagePick} />
         )}
-        <label>Programar publicación (opcional)</label>
-        <input type="datetime-local" value={publishAt} onChange={e => setPublishAt(e.target.value)} />
-        <p className="muted" style={{ marginTop: 4 }}>{publishAt ? 'Se publicará sola en esa fecha y hora, avisando a las alumnas.' : 'Déjalo en blanco para publicarlo ahora mismo.'}</p>
+        <label>¿Cuándo se publica?</label>
+        <div className="row" style={{ marginBottom: 6 }}>
+          <div className={`chip ${when === 'ahora' ? 'active' : ''}`} onClick={() => setWhen('ahora')}>Ahora mismo</div>
+          <div className={`chip ${when === 'programar' ? 'active' : ''}`} onClick={() => setWhen('programar')}>Programar fecha y hora</div>
+        </div>
+        {when === 'programar' && (
+          <>
+            <input type="datetime-local" value={publishAt} onChange={e => setPublishAt(e.target.value)} />
+            <p className="muted" style={{ marginTop: 4 }}>Se publicará sola en esa fecha y hora, avisando al grupo elegido.</p>
+          </>
+        )}
         <button className="btn btn-primary" style={{ marginTop: 10 }} disabled={uploading} onClick={publish}>
-          {publishAt ? 'Programar publicación' : 'Publicar en el muro'}
+          {when === 'programar' ? 'Programar publicación' : 'Publicar en el muro'}
         </button>
       </div>
       {scheduledPosts.length > 0 && (
@@ -2382,7 +2404,7 @@ function AdminMuro({ wallPosts, saveWallPosts, scheduledPosts, saveScheduledPost
           <div className="sectionlabel">Programadas</div>
           {[...scheduledPosts].sort((a, b) => new Date(a.publishAt) - new Date(b.publishAt)).map(p => (
             <div className="card postcard" key={p.id} style={{ borderLeftColor: 'var(--peach)' }}>
-              <div className="postdate">Se publica el {fmtDate(new Date(p.publishAt))} a las {new Date(p.publishAt).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</div>
+              <div className="postdate">Se publica el {fmtDate(new Date(p.publishAt))} a las {new Date(p.publishAt).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })} · <b>{p.audience === 'activos' ? 'solo con bono activo' : 'todas las alumnas'}</b></div>
               <h3>{p.title}</h3>
               {p.imageUrl && <img src={p.imageUrl} alt="" className="postimg" />}
               <p>{p.content}</p>
@@ -2394,7 +2416,7 @@ function AdminMuro({ wallPosts, saveWallPosts, scheduledPosts, saveScheduledPost
       <div className="sectionlabel">Publicaciones</div>
       {[...wallPosts].sort((a, b) => new Date(b.date) - new Date(a.date)).map(p => (
         <div className="card postcard" key={p.id}>
-          <div className="postdate">{fmtDate(new Date(p.date))}</div>
+          <div className="postdate">{fmtDate(new Date(p.date))}{p.audience === 'activos' && <> · <b>solo con bono activo</b></>}</div>
           <h3>{p.title}</h3>
           {p.imageUrl && <img src={p.imageUrl} alt="" className="postimg" />}
           <p>{p.content}</p>
@@ -2643,8 +2665,11 @@ function AdminRecursos({ resources, saveResources, toast }) {
   );
 }
 
-function AdminEventos({ events, saveEvents, bookings, students, adminToken, toast }) {
+function AdminEventos({ events, saveEvents, bookings, saveBookings, students, adminToken, toast }) {
   const settings = useContext(SettingsContext);
+  const [addingFor, setAddingFor] = useState(null); // id del evento al que se está apuntando a alguien
+  const [attSearch, setAttSearch] = useState('');
+  const [attMethod, setAttMethod] = useState('');
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -2700,6 +2725,26 @@ function AdminEventos({ events, saveEvents, bookings, students, adminToken, toas
   }
   function toggleActive(ev) {
     saveEvents(events.map(x => x.id === ev.id ? { ...x, active: x.active === false } : x));
+  }
+  function signUp(ev, s) {
+    const cap = ev.capacity || settings.defaultCapacity;
+    const occupied = bookings.filter(b => b.date === ev.date && b.time === ev.time && b.className === ev.name && occupiesSpot(b.status)).length;
+    if (occupied >= cap && !confirm(`"${ev.name}" ya está completo (${occupied}/${cap}). ¿Apuntar a ${s.name} igualmente?`)) return;
+    const method = attMethod || (isFreeEvent(ev) ? 'gratis' : 'efectivo');
+    const booking = {
+      id: uid(), studentId: s.id, day: dayNameForDate(new Date(`${ev.date}T12:00:00`)), time: ev.time, className: ev.name,
+      date: ev.date, status: 'confirmada', paymentMethod: method, price: method === 'gratis' ? 0 : (Number(ev.price) || 0), eventId: ev.id,
+      createdAt: new Date().toISOString()
+    };
+    saveBookings([...bookings, booking]);
+    setAttSearch('');
+    toast(`${s.name} apuntada a ${ev.name}`);
+  }
+  function unsign(ev, b) {
+    const s = students.find(x => x.id === b.studentId);
+    if (!confirm(`¿Quitar a ${s ? s.name : 'esta alumna'} de "${ev.name}"?`)) return;
+    saveBookings(bookings.map(x => x.id === b.id ? { ...x, status: 'cancelada' } : x));
+    toast('Alumna quitada del evento');
   }
   function removeEvent(ev) {
     if (!confirm(`¿Eliminar el evento "${ev.name}"? Las reservas que ya tenga no se ven afectadas.`)) return;
@@ -2775,9 +2820,47 @@ function AdminEventos({ events, saveEvents, bookings, students, adminToken, toas
               {ev.description && <p className="muted">{ev.description}</p>}
               <p className="muted" style={{ marginTop: 6 }}>{attendees.length}/{ev.capacity || settings.defaultCapacity} apuntadas</p>
               {attendees.length > 0 && (
-                <p className="muted" style={{ fontSize: 12 }}>
-                  {attendees.map(a => students.find(s => s.id === a.studentId)?.name || 'Alumna eliminada').join(', ')}
-                </p>
+                <ul style={{ margin: '6px 0 0', paddingLeft: 0 }}>
+                  {attendees.map(a => (
+                    <li key={a.id} className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', listStyle: 'none', marginBottom: 4 }}>
+                      <span>{students.find(s => s.id === a.studentId)?.name || 'Alumna eliminada'}</span>
+                      {a.status === 'pendiente_pago' && <span className="pill pill-gray">Pago pendiente</span>}
+                      {a.paymentMethod && a.status === 'confirmada' && <span className="pill pill-sage">{PAYMENT_LABELS[a.paymentMethod] || a.paymentMethod}</span>}
+                      <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => unsign(ev, a)}>Quitar</button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {addingFor === ev.id ? (
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
+                  <label>Método de pago</label>
+                  <select value={attMethod || (isFreeEvent(ev) ? 'gratis' : 'efectivo')} onChange={e => setAttMethod(e.target.value)}>
+                    {isFreeEvent(ev) && <option value="gratis">Gratis</option>}
+                    <option value="efectivo">Efectivo</option>
+                    <option value="transferencia">Transferencia</option>
+                    <option value="bizum">Bizum</option>
+                    {!isFreeEvent(ev) && <option value="gratis">Invitada (sin pagar)</option>}
+                  </select>
+                  <input type="text" value={attSearch} onChange={e => setAttSearch(e.target.value)} placeholder="Buscar por nombre o teléfono…" style={{ marginTop: 8 }} autoFocus />
+                  <div style={{ maxHeight: 240, overflowY: 'auto', marginTop: 4 }}>
+                    {(() => {
+                      const q = attSearch.trim().toLowerCase();
+                      const already = new Set(attendees.map(a => a.studentId));
+                      const matches = [...students].filter(s => !already.has(s.id))
+                        .filter(s => !q || (s.name || '').toLowerCase().includes(q) || (s.phone || '').toLowerCase().includes(q))
+                        .sort((a, b) => a.name.localeCompare(b.name));
+                      return matches.length === 0 ? <p className="muted" style={{ marginTop: 6 }}>Sin resultados.</p> : matches.map(s => (
+                        <div key={s.id} className="optionbox" style={{ marginTop: 8 }} onClick={() => signUp(ev, s)}>
+                          <div className="t">{s.name}</div>
+                          <div className="s">{s.phone}</div>
+                        </div>
+                      ));
+                    })()}
+                  </div>
+                  <button className="linklike" style={{ marginTop: 8 }} onClick={() => { setAddingFor(null); setAttSearch(''); }}>Cerrar</button>
+                </div>
+              ) : (
+                <button className="linklike" style={{ marginTop: 8 }} onClick={() => { setAddingFor(ev.id); setAttMethod(''); setAttSearch(''); }}>+ Apuntar alumna</button>
               )}
               <div className="row" style={{ marginTop: 10 }}>
                 <button className="linklike" onClick={() => toggleActive(ev)}>{closed ? 'Reabrir' : 'Cerrar inscripciones'}</button>

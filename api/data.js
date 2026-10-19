@@ -1,6 +1,7 @@
 import { Redis } from '@upstash/redis';
 import { syncStudentContact, notifyBonoConfirmado, notifySueltaConfirmada, broadcastWallPost, broadcastPoll, broadcastHoliday, notifyWaitlistSpotOpen, broadcastEvent } from './_brevo.js';
 import { notifyStudentPush, notifyAllPush } from './_push.js';
+import { audienceStudents } from './_audience.js';
 
 const redis = Redis.fromEnv();
 
@@ -330,8 +331,8 @@ async function runBrevoSideEffects(key, value, diff, appBaseUrl) {
     await notifySueltaConfirmada(student, diff.after);
     return;
   }
-  if (key === 'bookings' && diff?.type === 'append' && diff.item.status === 'confirmada' && (diff.item.paymentMethod === 'efectivo' || diff.item.paymentMethod === 'transferencia')) {
-    // Alta manual de una clase ya pagada en efectivo o transferencia, hecha por Beatriz.
+  if (key === 'bookings' && diff?.type === 'append' && diff.item.status === 'confirmada' && (['efectivo', 'transferencia', 'bizum', 'gratis'].includes(diff.item.paymentMethod))) {
+    // Alta manual de una clase ya pagada (o de un evento gratuito) hecha por Beatriz o por la propia alumna.
     const students = (await redis.get('students')) || [];
     const student = students.find(s => s.id === diff.item.studentId);
     await notifySueltaConfirmada(student, diff.item);
@@ -345,7 +346,8 @@ async function runBrevoSideEffects(key, value, diff, appBaseUrl) {
   }
   if (key === 'wallPosts' && diff?.type === 'append') {
     const students = (await redis.get('students')) || [];
-    await broadcastWallPost(students, diff.item.title, diff.item.content, diff.item.imageUrl);
+    const purchases = (await redis.get('purchases')) || [];
+    await broadcastWallPost(audienceStudents(students, purchases, diff.item.audience), diff.item.title, diff.item.content, diff.item.imageUrl);
     return;
   }
   if (key === 'polls' && diff?.type === 'append') {
@@ -386,14 +388,16 @@ async function publishDueScheduledPosts() {
     const remaining = fresh.filter(p => new Date(p.publishAt) > now);
 
     const wallPosts = (await redis.get('wallPosts')) || [];
-    const newPosts = due.map(p => ({ id: p.id, title: p.title, content: p.content, imageUrl: p.imageUrl, date: p.publishAt }));
+    const newPosts = due.map(p => ({ id: p.id, title: p.title, content: p.content, imageUrl: p.imageUrl, date: p.publishAt, audience: p.audience }));
     await redis.set('wallPosts', [...wallPosts, ...newPosts]);
     await redis.set('scheduledPosts', remaining);
 
     const students = (await redis.get('students')) || [];
+    const purchases = (await redis.get('purchases')) || [];
     for (const p of newPosts) {
-      await broadcastWallPost(students, p.title, p.content, p.imageUrl);
-      await notifyAllPush(p.title, p.content);
+      const recipients = audienceStudents(students, purchases, p.audience);
+      await broadcastWallPost(recipients, p.title, p.content, p.imageUrl);
+      await notifyAllPush(p.title, p.content, p.audience === 'activos' ? new Set(recipients.map(s => s.id)) : null);
     }
   } catch (e) {
     console.error('Publicaciones programadas: error publicando', e);
