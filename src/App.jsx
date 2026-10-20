@@ -1629,7 +1629,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
               })}
         </>
       )}
-      {adminTab === 'horarios' && <AdminHorarios schedule={schedule} saveSchedule={saveSchedule} holidays={holidays} saveHolidays={saveHolidays} punctualClasses={punctualClasses} savePunctualClasses={savePunctualClasses} toast={toast} />}
+      {adminTab === 'horarios' && <AdminHorarios schedule={schedule} saveSchedule={saveSchedule} holidays={holidays} saveHolidays={saveHolidays} scheduledPosts={scheduledPosts} saveScheduledPosts={saveScheduledPosts} punctualClasses={punctualClasses} savePunctualClasses={savePunctualClasses} toast={toast} />}
       {adminTab === 'gestionbonos' && <AdminBonos bonos={bonos} saveBonos={saveBonos} toast={toast} />}
       {adminTab === 'muro' && <AdminMuro wallPosts={wallPosts} saveWallPosts={saveWallPosts} scheduledPosts={scheduledPosts} saveScheduledPosts={saveScheduledPosts} students={students} purchases={purchases} adminToken={adminToken} toast={toast} />}
       {adminTab === 'encuestas' && <AdminEncuestas polls={polls} savePolls={savePolls} students={students} adminToken={adminToken} toast={toast} />}
@@ -1641,7 +1641,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
   );
 }
 
-function AdminHorarios({ schedule, saveSchedule, holidays, saveHolidays, punctualClasses, savePunctualClasses, toast }) {
+function AdminHorarios({ schedule, saveSchedule, holidays, saveHolidays, scheduledPosts, saveScheduledPosts, punctualClasses, savePunctualClasses, toast }) {
   const days = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
   function updateDay(day, classes) {
     saveSchedule({ ...schedule, [day]: classes });
@@ -1658,7 +1658,7 @@ function AdminHorarios({ schedule, saveSchedule, holidays, saveHolidays, punctua
   const upcomingPunctuales = [...(punctualClasses || [])].sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   return (
     <>
-      <AdminFestivos holidays={holidays} saveHolidays={saveHolidays} toast={toast} />
+      <AdminFestivos holidays={holidays} saveHolidays={saveHolidays} scheduledPosts={scheduledPosts} saveScheduledPosts={saveScheduledPosts} toast={toast} />
       {upcomingPunctuales.length > 0 && (
         <div className="card">
           <h3>Clases puntuales (un solo día)</h3>
@@ -1677,21 +1677,26 @@ function AdminHorarios({ schedule, saveSchedule, holidays, saveHolidays, punctua
   );
 }
 
-function AdminFestivos({ holidays, saveHolidays, toast }) {
+function AdminFestivos({ holidays, saveHolidays, scheduledPosts, saveScheduledPosts, toast }) {
   const [adding, setAdding] = useState(false);
   const [date, setDate] = useState('');
   const [endDate, setEndDate] = useState(''); // vacío = solo un día
   const [label, setLabel] = useState('');
+  const [when, setWhen] = useState('ahora'); // cuándo se avisa a las alumnas: 'ahora' | 'programar'
+  const [noticeAt, setNoticeAt] = useState('');
 
   function add() {
     if (!date) { toast('Elige una fecha'); return; }
+    const programar = when === 'programar';
+    const noticeDate = new Date(noticeAt);
+    if (programar && (!noticeAt || isNaN(noticeDate.getTime()) || noticeDate <= new Date())) { toast('Elige una fecha y hora futuras para el aviso'); return; }
     const last = endDate || date;
     if (last < date) { toast('La fecha final no puede ser anterior a la inicial'); return; }
     if (freezeDays(date, last) > 60) { toast('Máximo 60 días seguidos'); return; }
     // Un festivo por día: un periodo se guarda como varios, saltando los ya marcados.
     const nuevos = [];
     for (let d = new Date(`${date}T12:00:00`); isoDate(d) <= last; d = addDays(d, 1)) {
-      if (!holidays.some(h => h.date === isoDate(d))) nuevos.push({ id: uid(), date: isoDate(d), label: label.trim() });
+      if (!holidays.some(h => h.date === isoDate(d))) nuevos.push({ id: uid(), date: isoDate(d), label: label.trim(), ...(programar ? { noAviso: true } : {}) });
     }
     if (nuevos.length === 0) { toast(last === date ? 'Ese día ya está marcado como festivo' : 'Esos días ya están marcados como festivos'); return; }
     saveHolidays([...holidays, ...nuevos]);
@@ -1699,8 +1704,19 @@ function AdminFestivos({ holidays, saveHolidays, toast }) {
     setDate('');
     setEndDate('');
     setLabel('');
-    toast(nuevos.length === 1 ? 'Día festivo añadido, avisando a las alumnas…' : `${nuevos.length} días festivos añadidos, avisando a las alumnas…`);
+    setWhen('ahora');
+    setNoticeAt('');
     const cuando = nuevos.length === 1 ? fmtIso(nuevos[0].date) : `del ${fmtIso(nuevos[0].date)} al ${fmtIso(nuevos[nuevos.length - 1].date)}`;
+    if (programar) {
+      // El aviso se publica solo en la fecha elegida (Muro + email + push), como una publicación programada.
+      saveScheduledPosts([...scheduledPosts, {
+        id: uid(), title: 'Día festivo', content: `Os avisamos de que ${cuando} el centro estará cerrado${label.trim() ? ` (${label.trim()})` : ''} y no habrá clases.`,
+        imageUrl: null, audience: 'todos', publishAt: noticeDate.toISOString(), createdAt: new Date().toISOString()
+      }]);
+      toast(`Festivo guardado. Se avisará a las alumnas el ${fmtDate(noticeDate)} a las ${noticeDate.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}`);
+      return;
+    }
+    toast(nuevos.length === 1 ? 'Día festivo añadido, avisando a las alumnas…' : `${nuevos.length} días festivos añadidos, avisando a las alumnas…`);
     fetch('/api/notify-wall', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1736,6 +1752,17 @@ function AdminFestivos({ holidays, saveHolidays, toast }) {
           </div>
           <p className="muted" style={{ marginTop: 4 }}>Para un solo día, deja "Hasta" vacío. Para varios seguidos (ej. del 25 al 27), pon el último día.</p>
           <input type="text" value={label} onChange={e => setLabel(e.target.value)} placeholder="Motivo (opcional, ej. Navidad)" />
+          <label>¿Cuándo se avisa a las alumnas?</label>
+          <div className="row" style={{ marginBottom: 6 }}>
+            <div className={`chip ${when === 'ahora' ? 'active' : ''}`} onClick={() => setWhen('ahora')}>Ahora mismo</div>
+            <div className={`chip ${when === 'programar' ? 'active' : ''}`} onClick={() => setWhen('programar')}>Programar el aviso</div>
+          </div>
+          {when === 'programar' && (
+            <>
+              <input type="datetime-local" value={noticeAt} onChange={e => setNoticeAt(e.target.value)} />
+              <p className="muted" style={{ marginTop: 4 }}>El festivo se marca ya, pero el aviso (Muro, email y móvil) sale solo en esa fecha y hora. Puedes cancelarlo en Publicar en el muro → Programadas.</p>
+            </>
+          )}
           <div className="row" style={{ marginTop: 8 }}>
             <button className="btn btn-sage btn-sm" onClick={add}>Añadir</button>
             <button className="linklike" onClick={() => setAdding(false)}>Cancelar</button>

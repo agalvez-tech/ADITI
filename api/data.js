@@ -358,13 +358,14 @@ async function runBrevoSideEffects(key, value, diff, appBaseUrl, current) {
   if (key === 'holidays' && !diff) {
     // Varios festivos seguidos añadidos de golpe (p. ej. del 25 al 27): un solo aviso.
     const added = (value || []).filter(h => !(current || []).some(c => c.id === h.id)).sort((a, b) => a.date.localeCompare(b.date));
-    if (added.length > 1) {
+    if (added.length > 1 && !added[0].noAviso) {
       const students = (await redis.get('students')) || [];
       await broadcastHoliday(students, { ...added[0], endDate: added[added.length - 1].date });
     }
     return;
   }
   if (key === 'holidays' && diff?.type === 'append') {
+    if (diff.item.noAviso) return; // el aviso está programado para otro día
     const students = (await redis.get('students')) || [];
     await broadcastHoliday(students, diff.item);
     return;
