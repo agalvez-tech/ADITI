@@ -134,10 +134,12 @@ export async function broadcastWallPost(students, title, content, imageUrl) {
 // Aviso por email cuando Beatriz marca un día como festivo/cerrado.
 export async function broadcastHoliday(students, holiday) {
   if (!enabled() || !holiday) return;
-  const dateStr = new Date(`${holiday.date}T12:00:00`).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
-  const dateCap = dateStr.charAt(0).toUpperCase() + dateStr.slice(1);
+  const fmt = (iso) => { const s = new Date(`${iso}T12:00:00`).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' }); return s.charAt(0).toUpperCase() + s.slice(1); };
+  // Con endDate (varios días seguidos) se avisa una sola vez del periodo entero.
+  const isRange = holiday.endDate && holiday.endDate !== holiday.date;
+  const dateCap = isRange ? `del ${fmt(holiday.date)} al ${fmt(holiday.endDate)}` : fmt(holiday.date);
   const emails = (students || []).map(s => s.email).filter(Boolean);
-  const html = `<p>Os avisamos de que <b>${dateCap}</b> el centro estará cerrado${holiday.label ? ` (${holiday.label})` : ''} y no habrá clases ese día.</p><p>— Aditi Functional Yoga</p>`;
+  const html = `<p>Os avisamos de que <b>${dateCap}</b> el centro estará cerrado${holiday.label ? ` (${holiday.label})` : ''} y no habrá clases ${isRange ? 'esos días' : 'ese día'}.</p><p>— Aditi Functional Yoga</p>`;
   await Promise.allSettled(
     emails.map(email => sendEmail(email, `Aditi: día festivo — ${dateCap}`, html))
   );

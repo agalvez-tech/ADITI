@@ -298,7 +298,7 @@ async function notifyNextWaitlisted(cancelledBooking, allBookings) {
 
 // Dispara las integraciones de Brevo según qué colección cambió. No hace
 // nada si BREVO_API_KEY no está configurada (ver api/_brevo.js).
-async function runBrevoSideEffects(key, value, diff, appBaseUrl) {
+async function runBrevoSideEffects(key, value, diff, appBaseUrl, current) {
   if (key === 'students') {
     const purchases = (await redis.get('purchases')) || [];
     await Promise.allSettled((value || []).map(s => syncStudentContact(s, purchases)));
@@ -353,6 +353,15 @@ async function runBrevoSideEffects(key, value, diff, appBaseUrl) {
   if (key === 'polls' && diff?.type === 'append') {
     const students = (await redis.get('students')) || [];
     await broadcastPoll(students, diff.item, appBaseUrl);
+    return;
+  }
+  if (key === 'holidays' && !diff) {
+    // Varios festivos seguidos añadidos de golpe (p. ej. del 25 al 27): un solo aviso.
+    const added = (value || []).filter(h => !(current || []).some(c => c.id === h.id)).sort((a, b) => a.date.localeCompare(b.date));
+    if (added.length > 1) {
+      const students = (await redis.get('students')) || [];
+      await broadcastHoliday(students, { ...added[0], endDate: added[added.length - 1].date });
+    }
     return;
   }
   if (key === 'holidays' && diff?.type === 'append') {
@@ -466,7 +475,7 @@ export default async function handler(req, res) {
       // pero un fallo aquí no hace fallar la escritura ya confirmada.
       try {
         const appBaseUrl = process.env.APP_BASE_URL || `https://${req.headers.host}`;
-        await runBrevoSideEffects(key, value, diff, appBaseUrl);
+        await runBrevoSideEffects(key, value, diff, appBaseUrl, current);
       } catch (e) {
         console.error('Brevo: error en efectos secundarios', e);
       }

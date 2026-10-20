@@ -1679,21 +1679,31 @@ function AdminHorarios({ schedule, saveSchedule, holidays, saveHolidays, punctua
 function AdminFestivos({ holidays, saveHolidays, toast }) {
   const [adding, setAdding] = useState(false);
   const [date, setDate] = useState('');
+  const [endDate, setEndDate] = useState(''); // vacío = solo un día
   const [label, setLabel] = useState('');
 
   function add() {
     if (!date) { toast('Elige una fecha'); return; }
-    if (holidays.some(h => h.date === date)) { toast('Ese día ya está marcado como festivo'); return; }
-    const holiday = { id: uid(), date, label: label.trim() };
-    saveHolidays([...holidays, holiday]);
+    const last = endDate || date;
+    if (last < date) { toast('La fecha final no puede ser anterior a la inicial'); return; }
+    if (freezeDays(date, last) > 60) { toast('Máximo 60 días seguidos'); return; }
+    // Un festivo por día: un periodo se guarda como varios, saltando los ya marcados.
+    const nuevos = [];
+    for (let d = new Date(`${date}T12:00:00`); isoDate(d) <= last; d = addDays(d, 1)) {
+      if (!holidays.some(h => h.date === isoDate(d))) nuevos.push({ id: uid(), date: isoDate(d), label: label.trim() });
+    }
+    if (nuevos.length === 0) { toast(last === date ? 'Ese día ya está marcado como festivo' : 'Esos días ya están marcados como festivos'); return; }
+    saveHolidays([...holidays, ...nuevos]);
     setAdding(false);
     setDate('');
+    setEndDate('');
     setLabel('');
-    toast('Día festivo añadido, avisando a las alumnas…');
+    toast(nuevos.length === 1 ? 'Día festivo añadido, avisando a las alumnas…' : `${nuevos.length} días festivos añadidos, avisando a las alumnas…`);
+    const cuando = nuevos.length === 1 ? fmtIso(nuevos[0].date) : `del ${fmtIso(nuevos[0].date)} al ${fmtIso(nuevos[nuevos.length - 1].date)}`;
     fetch('/api/notify-wall', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Día festivo', body: `${fmtDate(new Date(`${holiday.date}T12:00:00`))}${holiday.label ? ` · ${holiday.label}` : ''}: no hay clases` })
+      body: JSON.stringify({ title: 'Día festivo', body: `${cuando}${label.trim() ? ` · ${label.trim()}` : ''}: no hay clases` })
     }).catch(() => {});
   }
   function remove(h) {
@@ -1712,14 +1722,26 @@ function AdminFestivos({ holidays, saveHolidays, toast }) {
         </div>
       ))}
       {adding ? (
-        <div className="row" style={{ marginTop: 10, alignItems: 'center' }}>
-          <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ width: 150, flex: 'none' }} />
-          <input type="text" value={label} onChange={e => setLabel(e.target.value)} placeholder="Motivo (opcional, ej. Navidad)" style={{ width: 'auto', flex: 1 }} />
-          <button className="btn btn-sage btn-sm" onClick={add}>Añadir</button>
-          <button className="linklike" onClick={() => setAdding(false)}>Cancelar</button>
+        <div style={{ marginTop: 10 }}>
+          <div className="row">
+            <div style={{ flex: 1 }}>
+              <label>Desde</label>
+              <input type="date" value={date} onChange={e => setDate(e.target.value)} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label>Hasta (opcional)</label>
+              <input type="date" value={endDate} min={date} onChange={e => setEndDate(e.target.value)} />
+            </div>
+          </div>
+          <p className="muted" style={{ marginTop: 4 }}>Para un solo día, deja "Hasta" vacío. Para varios seguidos (ej. del 25 al 27), pon el último día.</p>
+          <input type="text" value={label} onChange={e => setLabel(e.target.value)} placeholder="Motivo (opcional, ej. Navidad)" />
+          <div className="row" style={{ marginTop: 8 }}>
+            <button className="btn btn-sage btn-sm" onClick={add}>Añadir</button>
+            <button className="linklike" onClick={() => setAdding(false)}>Cancelar</button>
+          </div>
         </div>
       ) : (
-        <button className="linklike" style={{ marginTop: 10 }} onClick={() => setAdding(true)}>+ Marcar un día como festivo</button>
+        <button className="linklike" style={{ marginTop: 10 }} onClick={() => setAdding(true)}>+ Marcar festivo (uno o varios días)</button>
       )}
     </div>
   );
