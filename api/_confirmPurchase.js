@@ -14,6 +14,11 @@ export async function confirmPaymentFromParams(params) {
     // si además de codificar viniera ya en JSON plano, decodeURIComponent no lo altera.
     const { kind, itemId } = JSON.parse(decodeURIComponent(params.Ds_MerchantData));
 
+    // Redsys avisa dos veces (servidor y retorno del navegador) casi a la vez: sin
+    // este cierre ambas confirmaban y mandaban el email duplicado.
+    const lockKey = `payConfirm:${kind}:${itemId}`;
+    if (!(await redis.set(lockKey, '1', { nx: true, ex: 600 }))) return success;
+    try {
     if (kind === 'bono') {
       const purchases = (await redis.get('purchases')) || [];
       let confirmed = null;
@@ -57,6 +62,10 @@ export async function confirmPaymentFromParams(params) {
         const student = students.find(s => s.id === confirmed.studentId);
         await notifySueltaConfirmada(student, confirmed);
       }
+    }
+    } catch (e) {
+      await redis.del(lockKey); // que el siguiente aviso pueda reintentar
+      throw e;
     }
   }
 

@@ -398,7 +398,8 @@ async function publishDueScheduledPosts() {
     const remaining = fresh.filter(p => new Date(p.publishAt) > now);
 
     const wallPosts = (await redis.get('wallPosts')) || [];
-    const newPosts = due.map(p => ({ id: p.id, title: p.title, content: p.content, imageUrl: p.imageUrl, date: p.publishAt, audience: p.audience }));
+    // Si una programada ya publicada reaparece (escritura con datos antiguos), no se repite.
+    const newPosts = due.filter(p => !wallPosts.some(w => w.id === p.id)).map(p => ({ id: p.id, title: p.title, content: p.content, imageUrl: p.imageUrl, date: p.publishAt, audience: p.audience }));
     await redis.set('wallPosts', [...wallPosts, ...newPosts]);
     await redis.set('scheduledPosts', remaining);
 
