@@ -1026,7 +1026,7 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
   const [showDetail, setShowDetail] = useState(false);
   const [bonoId, setBonoId] = useState('');
   const [trimestre, setTrimestre] = useState(false);
-  const [payMethod, setPayMethod] = useState('efectivo');
+  const [payMethod, setPayMethod] = useState('');
   const [purchaseDateStr, setPurchaseDateStr] = useState(() => isoDate(new Date()));
 
   function handleSave(data, error) {
@@ -1059,7 +1059,7 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
     setBonoId('');
     setTrimestre(false);
     setPurchaseDateStr(isoDate(new Date()));
-    toast(`${b.name} dado de alta (${payMethod}) para ${s.name}`);
+    toast(`${b.name} dado de alta${payMethod ? ` (${payMethod})` : ''} para ${s.name}`);
   }
 
   const sueltaOptions = classesForDate(sueltaDate, classInfo || {});
@@ -1160,6 +1160,7 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
           )}
           <label>Método de pago</label>
           <select value={payMethod} onChange={e => setPayMethod(e.target.value)}>
+            <option value="">Sin especificar</option>
             <option value="efectivo">Efectivo</option>
             <option value="transferencia">Transferencia</option>
           </select>
@@ -1362,7 +1363,7 @@ function AdminReservaEditRow({ b, bookings, saveBookings, purchases, savePurchas
   );
 }
 
-const PAYMENT_LABELS = { redsys: 'Tarjeta', bizum: 'Bizum', efectivo: 'Efectivo', transferencia: 'Transferencia', gratis: 'Gratis' };
+const PAYMENT_LABELS = { redsys: 'Tarjeta', bizum: 'Bizum', efectivo: 'Efectivo', transferencia: 'Transferencia', gratis: 'Gratis', '': 'Sin especificar' };
 
 function AdminEstadisticas({ students, purchases, bookings, bonos }) {
   const [period, setPeriod] = useState('mes');
