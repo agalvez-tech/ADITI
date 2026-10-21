@@ -2353,6 +2353,7 @@ function AdminMuro({ wallPosts, saveWallPosts, scheduledPosts, saveScheduledPost
   const [publishAt, setPublishAt] = useState(''); // valor de datetime-local cuando se programa
   const [when, setWhen] = useState('ahora'); // 'ahora' | 'programar'
   const [audience, setAudience] = useState(null); // 'todos' | 'activos'; Beatriz tiene que elegirlo siempre
+  const [editing, setEditing] = useState(null); // { id, kind: 'post' | 'scheduled', origImage } al editar algo ya creado
 
   const nTodos = students.length;
   const nActivos = students.filter(s => hasActiveBonoAt(purchases, s.id, new Date())).length;
@@ -2373,18 +2374,49 @@ function AdminMuro({ wallPosts, saveWallPosts, scheduledPosts, saveScheduledPost
   }
 
   function removeImage() {
-    if (imageUrl) deleteWallImage(imageUrl, adminToken);
+    // Al editar, la foto original solo se borra del servidor al guardar (por si se cancela).
+    if (imageUrl && imageUrl !== editing?.origImage) deleteWallImage(imageUrl, adminToken);
     setImageUrl(null);
     setImagePreview(null);
   }
 
   function resetForm() {
-    setTitle(''); setContent(''); setImageUrl(null); setImagePreview(null); setPublishAt(''); setWhen('ahora'); setAudience(null);
+    setTitle(''); setContent(''); setImageUrl(null); setImagePreview(null); setPublishAt(''); setWhen('ahora'); setAudience(null); setEditing(null);
+  }
+
+  function startEdit(p, kind) {
+    setEditing({ id: p.id, kind, origImage: p.imageUrl || null });
+    setTitle(p.title); setContent(p.content); setImageUrl(p.imageUrl || null); setImagePreview(p.imageUrl || null);
+    setAudience(p.audience || 'todos');
+    if (kind === 'scheduled') {
+      const d = new Date(p.publishAt);
+      setWhen('programar');
+      setPublishAt(`${isoDate(d)}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`);
+    } else {
+      setWhen('ahora'); setPublishAt('');
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function saveEdit() {
+    const data = { title: title.trim(), content: content.trim(), imageUrl: imageUrl || null, audience };
+    if (editing.kind === 'scheduled') {
+      const publishDate = new Date(publishAt);
+      if (!publishAt || isNaN(publishDate.getTime()) || publishDate <= new Date()) { toast('Elige una fecha y hora futuras'); return; }
+      saveScheduledPosts(scheduledPosts.map(x => x.id === editing.id ? { ...x, ...data, publishAt: publishDate.toISOString() } : x));
+    } else {
+      // Un cambio en una publicación ya hecha no vuelve a avisar a las alumnas.
+      saveWallPosts(wallPosts.map(x => x.id === editing.id ? { ...x, ...data } : x));
+    }
+    if (editing.origImage && editing.origImage !== imageUrl) deleteWallImage(editing.origImage, adminToken);
+    resetForm();
+    toast('Cambios guardados');
   }
 
   function publish() {
     if (!title.trim() || !content.trim()) { toast('Escribe un título y un mensaje'); return; }
     if (!audience) { toast('Elige a quién se envía: a todas o solo a las alumnas con bono activo'); return; }
+    if (editing) { saveEdit(); return; }
     if (when === 'programar') {
       const publishDate = new Date(publishAt);
       if (!publishAt || isNaN(publishDate.getTime()) || publishDate <= new Date()) { toast('Elige una fecha y hora futuras para programarlo'); return; }
@@ -2414,6 +2446,7 @@ function AdminMuro({ wallPosts, saveWallPosts, scheduledPosts, saveScheduledPost
   return (
     <>
       <div className="card">
+        {editing && <p className="muted" style={{ marginTop: 0 }}><b>Editando {editing.kind === 'scheduled' ? 'una publicación programada' : 'una publicación del muro'}.</b> {editing.kind === 'post' ? 'Los cambios no vuelven a avisar a las alumnas.' : ''}</p>}
         <label>Título</label>
         <input type="text" value={title} onChange={e => setTitle(e.target.value)} placeholder="Ej. Clase especial de luna llena" />
         <label>Mensaje</label>
@@ -2434,6 +2467,13 @@ function AdminMuro({ wallPosts, saveWallPosts, scheduledPosts, saveScheduledPost
         ) : (
           <input type="file" accept="image/*" onChange={handleImagePick} />
         )}
+        {editing?.kind === 'scheduled' ? (
+          <>
+            <label>Fecha y hora de publicación</label>
+            <input type="datetime-local" value={publishAt} onChange={e => setPublishAt(e.target.value)} />
+          </>
+        ) : !editing && (
+          <>
         <label>¿Cuándo se publica?</label>
         <div className="row" style={{ marginBottom: 6 }}>
           <div className={`chip ${when === 'ahora' ? 'active' : ''}`} onClick={() => setWhen('ahora')}>Ahora mismo</div>
@@ -2445,9 +2485,12 @@ function AdminMuro({ wallPosts, saveWallPosts, scheduledPosts, saveScheduledPost
             <p className="muted" style={{ marginTop: 4 }}>Se publicará sola en esa fecha y hora, avisando al grupo elegido.</p>
           </>
         )}
+          </>
+        )}
         <button className="btn btn-primary" style={{ marginTop: 10 }} disabled={uploading} onClick={publish}>
-          {when === 'programar' ? 'Programar publicación' : 'Publicar en el muro'}
+          {editing ? 'Guardar cambios' : when === 'programar' ? 'Programar publicación' : 'Publicar en el muro'}
         </button>
+        {editing && <button className="linklike" style={{ marginLeft: 10 }} onClick={resetForm}>Cancelar edición</button>}
       </div>
       {scheduledPosts.length > 0 && (
         <>
@@ -2458,7 +2501,8 @@ function AdminMuro({ wallPosts, saveWallPosts, scheduledPosts, saveScheduledPost
               <h3>{p.title}</h3>
               {p.imageUrl && <img src={p.imageUrl} alt="" className="postimg" />}
               <p>{p.content}</p>
-              <button className="linklike" style={{ color: 'var(--danger)', marginTop: 8 }} onClick={() => cancelScheduled(p)}>Cancelar programación</button>
+              <button className="linklike" style={{ marginTop: 8 }} onClick={() => startEdit(p, 'scheduled')}>Editar</button>
+              <button className="linklike" style={{ color: 'var(--danger)', marginTop: 8, marginLeft: 12 }} onClick={() => cancelScheduled(p)}>Cancelar programación</button>
             </div>
           ))}
         </>
@@ -2470,7 +2514,8 @@ function AdminMuro({ wallPosts, saveWallPosts, scheduledPosts, saveScheduledPost
           <h3>{p.title}</h3>
           {p.imageUrl && <img src={p.imageUrl} alt="" className="postimg" />}
           <p>{p.content}</p>
-          <button className="linklike" style={{ color: 'var(--danger)', marginTop: 8 }}
+          <button className="linklike" style={{ marginTop: 8 }} onClick={() => startEdit(p, 'post')}>Editar</button>
+          <button className="linklike" style={{ color: 'var(--danger)', marginTop: 8, marginLeft: 12 }}
             onClick={() => {
               if (!confirm('¿Seguro que quieres eliminar esta publicación del muro?')) return;
               if (p.imageUrl) deleteWallImage(p.imageUrl, adminToken);
@@ -2721,6 +2766,7 @@ function AdminEventos({ events, saveEvents, bookings, saveBookings, students, ad
   const [attSearch, setAttSearch] = useState('');
   const [attMethod, setAttMethod] = useState('');
   const [creating, setCreating] = useState(false);
+  const [editingEv, setEditingEv] = useState(null); // evento que se está editando (null = creando uno nuevo)
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [date, setDate] = useState('');
@@ -2733,8 +2779,18 @@ function AdminEventos({ events, saveEvents, bookings, saveBookings, students, ad
 
   function resetForm() {
     setCreating(false);
+    setEditingEv(null);
     setName(''); setDescription(''); setDate(''); setTime(''); setPrice(''); setCapacity('');
     setImageUrl(null); setImagePreview(null);
+  }
+
+  function startEdit(ev) {
+    setCreating(true);
+    setEditingEv(ev);
+    setName(ev.name); setDescription(ev.description || ''); setDate(ev.date); setTime(ev.time);
+    setPrice(ev.price ? String(ev.price) : ''); setCapacity(ev.capacity ? String(ev.capacity) : '');
+    setImageUrl(ev.imageUrl || null); setImagePreview(ev.imageUrl || null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   async function handleImagePick(e) {
@@ -2752,13 +2808,33 @@ function AdminEventos({ events, saveEvents, bookings, saveBookings, students, ad
     setUploading(false);
   }
   function removeImage() {
-    if (imageUrl) deleteWallImage(imageUrl, adminToken);
+    // Al editar, la foto original solo se borra del servidor al guardar (por si se cancela).
+    if (imageUrl && imageUrl !== editingEv?.imageUrl) deleteWallImage(imageUrl, adminToken);
     setImageUrl(null);
     setImagePreview(null);
   }
 
+  function saveEdit() {
+    const old = editingEv;
+    const updated = {
+      ...old, name: name.trim(), description: description.trim(), date, time, price: Number(price) || 0,
+      capacity: capacity.trim() === '' ? settings.defaultCapacity : Number(capacity), imageUrl: imageUrl || null
+    };
+    // Las apuntadas se enlazan al evento por nombre, fecha y hora: si cambian, se mueven con él.
+    if (old.name !== updated.name || old.date !== updated.date || old.time !== updated.time) {
+      saveBookings(bookings.map(b => (b.eventId === old.id || (b.date === old.date && b.time === old.time && b.className === old.name))
+        ? { ...b, className: updated.name, date: updated.date, time: updated.time, day: dayNameForDate(new Date(`${updated.date}T12:00:00`)) }
+        : b));
+    }
+    saveEvents(events.map(x => x.id === old.id ? updated : x));
+    if (old.imageUrl && old.imageUrl !== updated.imageUrl) deleteWallImage(old.imageUrl, adminToken);
+    resetForm();
+    toast('Evento actualizado');
+  }
+
   function publish() {
     if (!name.trim() || !date || !time) { toast('Rellena al menos nombre, fecha y hora'); return; }
+    if (editingEv) { saveEdit(); return; }
     const event = {
       id: uid(), name: name.trim(), description: description.trim(),
       date, time, price: Number(price) || 0, capacity: capacity.trim() === '' ? settings.defaultCapacity : Number(capacity),
@@ -2843,7 +2919,7 @@ function AdminEventos({ events, saveEvents, bookings, saveBookings, students, ad
               <input type="file" accept="image/*" onChange={handleImagePick} />
             )}
             <div className="row" style={{ marginTop: 12 }}>
-              <button className="btn btn-primary btn-sm" disabled={uploading} onClick={publish}>Publicar evento</button>
+              <button className="btn btn-primary btn-sm" disabled={uploading} onClick={publish}>{editingEv ? 'Guardar cambios' : 'Publicar evento'}</button>
               <button className="linklike" onClick={resetForm}>Cancelar</button>
             </div>
           </>
@@ -2913,6 +2989,7 @@ function AdminEventos({ events, saveEvents, bookings, saveBookings, students, ad
                 <button className="linklike" style={{ marginTop: 8 }} onClick={() => { setAddingFor(ev.id); setAttMethod(''); setAttSearch(''); }}>+ Apuntar alumna</button>
               )}
               <div className="row" style={{ marginTop: 10 }}>
+                <button className="linklike" onClick={() => startEdit(ev)}>Editar</button>
                 <button className="linklike" onClick={() => toggleActive(ev)}>{closed ? 'Reabrir' : 'Cerrar inscripciones'}</button>
                 <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => removeEvent(ev)}>Eliminar</button>
               </div>
