@@ -168,6 +168,29 @@ Si lo marcas como pagado, quedará activo sin ningún cobro registrado. Solo haz
 ¿Marcarlo como pagado igualmente?`);
 }
 
+// Compara, bono por bono, las clases usadas con las reservas reales. Lo normal es
+// activas <= usadas <= activas + canceladas (las canceladas con menos de 3 h no
+// devuelven la clase). Fuera de ese rango hay un descuadre: menos usadas que
+// reservas = clases gratis; más usadas que reservas posibles = clases de más.
+function reconcileBonos(purchases, bookings) {
+  const rows = purchases.filter(p => p.status === 'confirmado' && p.classesTotal !== null).map(p => ({ p, act: 0, can: 0 }));
+  const byId = new Map(rows.map(r => [r.p.id, r]));
+  bookings.filter(b => b.paymentMethod === 'bono').forEach(b => {
+    // Reservas antiguas sin enlace: al bono limitado de la alumna que cubría ese día (ni antes de comprarlo ni tras caducar).
+    const day = new Date(`${b.date}T12:00:00`);
+    const guess = rows.filter(r => r.p.studentId === b.studentId && new Date(r.p.purchaseDate) <= addDays(day, 1) && new Date(r.p.expiryDate) >= day)
+      .sort((a, c) => new Date(a.p.expiryDate) - new Date(c.p.expiryDate))[0];
+    const row = b.purchaseId ? byId.get(b.purchaseId) : guess;
+    if (!row) return;
+    if (b.status === 'cancelada') row.can++; else if (b.status === 'confirmada') row.act++;
+  });
+  return rows.map(r => {
+    const used = r.p.classesUsed || 0;
+    const kind = used < r.act ? 'menos' : used > r.act + r.can ? 'mas' : 'ok';
+    return { ...r, used, kind, fix: kind === 'menos' ? r.act : r.act + r.can };
+  });
+}
+
 // Reservas futuras de una clase concreta del horario semanal (por día de la semana, hora y nombre).
 function futureBookingsOfSlot(bookings, dayName, time, name) {
   const todayIso = isoDate(new Date());
@@ -1494,6 +1517,7 @@ function AdminEstadisticas({ students, purchases, bookings, bonos }) {
 function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, polls, savePolls, holidays, saveHolidays, events, saveEvents, scheduledPosts, saveScheduledPosts, classCancellations, saveClassCancellations, punctualClasses, savePunctualClasses, resources, saveResources, activePurchaseFor, adminToken, schedule, saveSchedule, bonos, saveBonos, settings, saveSettings, onAdminLogout, savePurchases, saveBookings, saveWallPosts, toast }) {
   const [alumnaSearch, setAlumnaSearch] = useState('');
   const { freezes, saveFreezes } = useContext(FreezeContext);
+  const reviewCount = reconcileBonos(purchases, bookings).filter(r => r.kind !== 'ok' && new Date(r.p.expiryDate) >= addDays(new Date(), -30)).length;
   const tabs = [
     { id: 'estadisticas', label: 'Estadísticas' },
     { id: 'resumen', label: 'Resumen del día' },
@@ -1501,6 +1525,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
     { id: 'bonospend', label: 'Bonos pendientes' },
     { id: 'bonosactivos', label: 'Bonos confirmados' },
     { id: 'horarios', label: 'Horarios' },
+    { id: 'revision', label: `Revisión de bonos${reviewCount ? ` (${reviewCount})` : ''}` },
     { id: 'gestionbonos', label: 'Gestionar bonos' },
     { id: 'muro', label: 'Publicar en el muro' },
     { id: 'encuestas', label: 'Encuestas' },
@@ -1678,6 +1703,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
         </>
       )}
       {adminTab === 'horarios' && <AdminHorarios bookings={bookings} saveBookings={saveBookings} purchases={purchases} savePurchases={savePurchases} schedule={schedule} saveSchedule={saveSchedule} holidays={holidays} saveHolidays={saveHolidays} scheduledPosts={scheduledPosts} saveScheduledPosts={saveScheduledPosts} punctualClasses={punctualClasses} savePunctualClasses={savePunctualClasses} toast={toast} />}
+      {adminTab === 'revision' && <AdminRevisionBonos purchases={purchases} savePurchases={savePurchases} bookings={bookings} students={students} bonos={bonos} toast={toast} />}
       {adminTab === 'gestionbonos' && <AdminBonos bonos={bonos} saveBonos={saveBonos} toast={toast} />}
       {adminTab === 'muro' && <AdminMuro wallPosts={wallPosts} saveWallPosts={saveWallPosts} scheduledPosts={scheduledPosts} saveScheduledPosts={saveScheduledPosts} students={students} purchases={purchases} adminToken={adminToken} toast={toast} />}
       {adminTab === 'encuestas' && <AdminEncuestas polls={polls} savePolls={savePolls} students={students} adminToken={adminToken} toast={toast} />}
@@ -1943,6 +1969,58 @@ function BonoForm({ form, setForm, onSave, onCancel }) {
         <button className="btn btn-sage btn-sm" onClick={onSave}>Guardar</button>
         <button className="linklike" onClick={onCancel}>Cancelar</button>
       </div>
+    </>
+  );
+}
+
+function AdminRevisionBonos({ purchases, savePurchases, bookings, students, bonos, toast }) {
+  const nameOf = (id) => (students.find(s => s.id === id) || {}).name || 'Alumna eliminada';
+  const recent = (p) => new Date(p.expiryDate) >= addDays(new Date(), -30);
+  const issues = reconcileBonos(purchases, bookings).filter(r => r.kind !== 'ok' && recent(r.p))
+    .sort((a, b) => new Date(b.p.expiryDate) - new Date(a.p.expiryDate));
+
+  function adjust(r) {
+    const msg = `${nameOf(r.p.studentId)} · ${bonoName(bonos, r.p.bonoId)}: ahora figuran ${r.used} clases usadas y se ajustarán a ${r.fix}.\n\n${r.kind === 'menos'
+      ? `Tiene ${r.act} reservas activas con este bono, así que no pueden ser menos de ${r.act}.`
+      : `Entre reservas activas (${r.act}) y canceladas (${r.can}) no pueden ser más de ${r.act + r.can}.`}\n\n¿Ajustar?`;
+    if (!confirm(msg)) return;
+    savePurchases(purchases.map(x => x.id === r.p.id ? { ...x, classesUsed: r.fix } : x));
+    toast('Clases usadas ajustadas');
+  }
+
+  // Tarjeta: el banco activa al instante; si tardó horas es probable que se marcara a mano.
+  const toCheck = purchases.filter(p => p.status === 'confirmado' && recent(p) && !p.payment?.order && (p.paymentMethod === 'redsys' || !p.paymentMethod))
+    .sort((a, b) => new Date(b.purchaseDate) - new Date(a.purchaseDate));
+  const hoursToActivate = (p) => {
+    const activated = new Date(new Date(p.expiryDate).getTime() - (p.trimestre ? 90 : 30) * 86400000);
+    return (activated - new Date(p.purchaseDate)) / 3600000;
+  };
+
+  return (
+    <>
+      <div className="sectionlabel" style={{ marginTop: 0 }}>Clases usadas que no cuadran con las reservas</div>
+      <p className="muted" style={{ marginBottom: 8 }}>Compara cada bono con las reservas reales de la alumna. Solo aparecen los vigentes o caducados en los últimos 30 días.</p>
+      {issues.length === 0 ? <div className="empty">Todos los bonos cuadran con las reservas.</div> : issues.map(r => (
+        <div className="card" key={r.p.id}>
+          <h3>{nameOf(r.p.studentId)} <span className={`pill ${r.kind === 'menos' ? 'pill-peach' : 'pill-lav'}`}>{r.kind === 'menos' ? 'Se le cobra de menos' : 'Se le ha descontado de más'}</span></h3>
+          <p className="muted">{bonoName(bonos, r.p.bonoId)}{r.p.trimestre && ' · Trimestre'} · caduca el {fmtDate(new Date(r.p.expiryDate))}</p>
+          <p className="muted">Clases usadas: <b>{r.used}</b> de {r.p.classesTotal} · reservas activas: <b>{r.act}</b> · canceladas: {r.can}</p>
+          <button className="btn btn-sage btn-sm" style={{ marginTop: 8 }} onClick={() => adjust(r)}>Ajustar a {r.fix}</button>
+        </div>
+      ))}
+
+      <div className="sectionlabel">Pagos con tarjeta sin justificante del banco</div>
+      <p className="muted" style={{ marginBottom: 8 }}>Bonos activos pagados con tarjeta (o sin método de pago) que no tienen justificante guardado. Cuando el banco cobra, el bono se activa solo al instante; si tardó horas, lo más probable es que se marcara a mano. Compáralos con el panel de Redsys.</p>
+      {toCheck.length === 0 ? <div className="empty">No hay ninguno pendiente de comprobar.</div> : toCheck.map(p => {
+        const h = hoursToActivate(p);
+        return (
+          <div className="card" key={p.id}>
+            <h3>{nameOf(p.studentId)} <span className="pill pill-gray">{p.paymentMethod ? 'Tarjeta' : 'Sin método de pago'}</span></h3>
+            <p className="muted">{bonoName(bonos, p.bonoId)}{p.trimestre && ' · Trimestre'} · {p.price}€ · solicitado el {fmtDate(new Date(p.purchaseDate))}</p>
+            {p.paymentMethod && <p className="muted">{h > 0.2 ? `Se activó unas ${h < 48 ? `${Math.round(h)} horas` : `${Math.round(h / 24)} días`} después de pedirlo${h > 1 ? ': probablemente a mano' : ''}.` : 'Se activó al momento.'}</p>}
+          </div>
+        );
+      })}
     </>
   );
 }
