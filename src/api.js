@@ -5,13 +5,19 @@ export async function getData(key, adminToken) {
     const res = await fetch(`${BASE}?key=${encodeURIComponent(key)}`, {
       headers: adminToken ? { 'x-admin-token': adminToken } : undefined
     });
-    if (!res.ok) return null;
+    if (!res.ok) return undefined;
     const json = await res.json();
     return json.value;
   } catch (e) {
     console.error('Error leyendo', key, e);
-    return null;
+    return undefined;
   }
+}
+
+// undefined = no se ha podido leer (error de red/servidor); null = leído y vacío.
+// Distinguirlos evita que un fallo puntual se interprete como "no hay datos".
+export function hasAdminToken() {
+  try { return !!localStorage.getItem('aditi_admin_token'); } catch (e) { return false; }
 }
 
 export async function setData(key, value, adminToken) {

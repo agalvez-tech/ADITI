@@ -2,6 +2,7 @@ import { Redis } from '@upstash/redis';
 import { syncStudentContact, notifyBonoConfirmado, notifySueltaConfirmada, broadcastWallPost, broadcastPoll, broadcastHoliday, notifyWaitlistSpotOpen, broadcastEvent } from './_brevo.js';
 import { notifyStudentPush, notifyAllPush } from './_push.js';
 import { audienceStudents } from './_audience.js';
+import { bonoCatalog, expectedPurchase } from './_bonos.js';
 
 const redis = Redis.fromEnv();
 
@@ -123,7 +124,7 @@ function isTooFarAhead(item) {
   return item.date > maxDateStr;
 }
 
-function isBookingChangeAllowed(diff, current, schedule, holidays, events, classCancellations, punctualClasses) {
+function isBookingChangeAllowed(diff, current, schedule, holidays, events, classCancellations, punctualClasses, ctx = {}) {
   if (!diff) return false;
   if (diff.type === 'noop') return true;
 
@@ -151,6 +152,22 @@ function isBookingChangeAllowed(diff, current, schedule, holidays, events, class
   const isFreeEventSignup = item.status === 'confirmada' && item.paymentMethod === 'gratis' && !!freeEvent && !Number(freeEvent.price) && freeEvent.active !== false;
   const validNew = item.status === 'pendiente_pago' || (item.status === 'confirmada' && item.paymentMethod === 'bono') || item.status === 'en_espera' || isFreeEventSignup;
   if (!validNew) return false;
+
+  // Reserva con bono: el bono tiene que ser de esa alumna, estar confirmado
+  // (pagado), vigente ese día, con clases por usar y sin congelar.
+  if (item.status === 'confirmada' && item.paymentMethod === 'bono') {
+    const p = (ctx.purchases || []).find(x => x.id === item.purchaseId);
+    if (!p || p.studentId !== item.studentId || p.status !== 'confirmado') return false;
+    if (new Date(p.expiryDate) < new Date(`${item.date}T00:00:00`)) return false;
+    if (p.classesTotal !== null && (p.classesUsed || 0) >= p.classesTotal) return false;
+    if ((ctx.freezes || []).some(f => f.purchaseId === p.id && f.status === 'confirmado' && f.startDate <= item.date && item.date <= f.endDate)) return false;
+  }
+  // Clase suelta o evento pendiente de pago: el precio tiene que ser el real.
+  if (item.status === 'pendiente_pago') {
+    const evPrice = eventFor(events, item);
+    const expected = evPrice ? Number(evPrice.price) : Number(ctx.settings?.claseSueltaPrice ?? 20);
+    if (Number(item.price) !== expected) return false;
+  }
 
   // Día marcado como festivo por Beatriz: no se admiten reservas nuevas,
   // salvo que sea precisamente un evento especial programado ese mismo día
@@ -246,26 +263,51 @@ function isFreezeChangeAllowed(diff, current, purchases, settings) {
   return !cur.some(o => o.purchaseId === f.purchaseId && o.status !== 'cancelado' && (o.status === 'pendiente' || (f.startDate <= o.endDate && f.endDate >= o.startDate)));
 }
 
-function isPurchaseChangeAllowed(diff) {
+function isPurchaseChangeAllowed(diff, bonos) {
   if (!diff) return false;
   if (diff.type === 'noop') return true;
+  // Una alumna solo puede SOLICITAR un bono (pendiente de pago) con el precio y
+  // las clases reales de ese bono. Confirmarlo, o cambiar las clases usadas,
+  // solo lo hacen Beatriz, la pasarela de pago o el propio servidor al
+  // reservar/cancelar una clase (ver applyStudentBonoAccounting).
   if (diff.type === 'append') {
-    // Solo se puede crear una compra nueva en estado pendiente (aún sin pagar).
-    return diff.item?.status === 'pendiente';
-  }
-  if (diff.type === 'modify') {
-    const { before, after } = diff;
-    // Solo se permite descontar/ajustar classesUsed de un bono ya confirmado;
-    // ningún otro campo (status, price, expiryDate...) puede cambiar por esta vía.
-    if (before.status !== 'confirmado' || after.status !== 'confirmado') return false;
-    const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
-    for (const k of keys) {
-      if (k === 'classesUsed') continue;
-      if (!sameJson(before[k], after[k])) return false;
-    }
-    return true;
+    const p = diff.item || {};
+    if (p.status !== 'pendiente' || p.classesUsed !== 0 || typeof p.studentId !== 'string' || !['redsys', 'bizum'].includes(p.paymentMethod)) return false;
+    const exp = expectedPurchase(bonoCatalog(bonos), p);
+    return !!exp && Number(p.price) === exp.price && p.classesTotal === exp.classesTotal;
   }
   return false;
+}
+
+// Control de clases del bono hecho por el servidor cuando es una alumna (sin
+// token) quien reserva o cancela: así el número de clases usadas no depende de
+// lo que tenga cada móvil en pantalla.
+const LATE_CANCEL_HOURS_SERVER = 3;
+function isLateCancelServer(b) {
+  const now = new Date(`${madridNowString()}:00Z`);
+  return (new Date(`${b.date}T${b.time}:00Z`) - now) / 3600000 < LATE_CANCEL_HOURS_SERVER;
+}
+async function adjustBonoUsage(booking, delta) {
+  const purchases = (await redis.get('purchases')) || [];
+  let target = purchases.find(x => x.id === booking.purchaseId);
+  if (!target && delta < 0) {
+    // Reservas antiguas sin purchaseId: el bono vigente de la alumna ese día.
+    const onDate = new Date(`${booking.date}T12:00:00`);
+    target = purchases
+      .filter(x => x.studentId === booking.studentId && x.status === 'confirmado' && x.classesTotal !== null && new Date(x.expiryDate) >= onDate)
+      .sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate))[0];
+  }
+  if (!target || target.classesTotal === null) return;
+  const used = Math.min(target.classesTotal, Math.max(0, (target.classesUsed || 0) + delta));
+  await redis.set('purchases', purchases.map(x => x.id === target.id ? { ...x, classesUsed: used } : x));
+}
+async function applyStudentBonoAccounting(diff) {
+  if (diff?.type === 'append' && diff.item.status === 'confirmada' && diff.item.paymentMethod === 'bono') {
+    await adjustBonoUsage(diff.item, +1);
+  } else if (diff?.type === 'modify' && diff.before.status === 'confirmada' && diff.before.paymentMethod === 'bono'
+    && diff.after.status === 'cancelada' && !isLateCancelServer(diff.before)) {
+    await adjustBonoUsage(diff.before, -1);
+  }
 }
 
 // Al cancelarse una reserva, si esa clase tiene lista de espera y ya hay
@@ -459,9 +501,10 @@ export default async function handler(req, res) {
           const events = await redis.get('events');
           const classCancellations = await redis.get('classCancellations');
           const punctualClasses = await redis.get('punctualClasses');
-          allowed = isBookingChangeAllowed(diff, current, schedule, holidays, events, classCancellations, punctualClasses);
+          const ctx = { purchases: await redis.get('purchases'), freezes: await redis.get('freezes'), settings: await redis.get('settings') };
+          allowed = isBookingChangeAllowed(diff, current, schedule, holidays, events, classCancellations, punctualClasses, ctx);
         } else if (key === 'purchases') {
-          allowed = isPurchaseChangeAllowed(diff);
+          allowed = isPurchaseChangeAllowed(diff, await redis.get('bonos'));
         } else {
           allowed = isPollChangeAllowed(diff);
         }
@@ -471,6 +514,10 @@ export default async function handler(req, res) {
       }
 
       await redis.set(key, value);
+
+      if (!admin && key === 'bookings') {
+        try { await applyStudentBonoAccounting(diff); } catch (e) { console.error('Control de clases del bono: error', e); }
+      }
 
       // Efectos secundarios de Brevo (sincronizar contactos / avisos por email).
       // Se esperan (Vercel puede cortar el proceso justo después de responder),

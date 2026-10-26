@@ -1,12 +1,31 @@
+import { Redis } from '@upstash/redis';
 import { buildMerchantParameters, signParameters, generateOrder } from './_redsys.js';
+
+const redis = Redis.fromEnv();
+
+// El importe a cobrar sale siempre de lo que hay guardado (la solicitud
+// pendiente de esa alumna), nunca de lo que diga el navegador.
+const COLLECTION = { bono: ['purchases', 'pendiente'], suelta: ['bookings', 'pendiente_pago'], freeze: ['freezes', 'pendiente'] };
+async function pendingItemPrice(kind, itemId, studentId) {
+  const [key, pendingStatus] = COLLECTION[kind];
+  // La solicitud se guarda justo antes de pedir el pago: damos unos instantes por si aún se está escribiendo.
+  for (let i = 0; i < 4; i++) {
+    const item = ((await redis.get(key)) || []).find(x => x.id === itemId && x.studentId === studentId && x.status === pendingStatus);
+    if (item) return Number(item.price) > 0 ? Number(item.price) : null;
+    await new Promise(r => setTimeout(r, 400));
+  }
+  return null;
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
 
-  const { kind, itemId, studentId, amount, concept } = req.body || {};
-  if (!['bono', 'suelta', 'freeze'].includes(kind) || !itemId || !studentId || !amount) {
+  const { kind, itemId, studentId, concept } = req.body || {};
+  if (!['bono', 'suelta', 'freeze'].includes(kind) || !itemId || !studentId) {
     return res.status(400).json({ error: 'Faltan datos para iniciar el pago' });
   }
+  const amount = await pendingItemPrice(kind, itemId, studentId);
+  if (!amount) return res.status(400).json({ error: 'No hay ninguna solicitud pendiente de pago con ese importe' });
 
   const env = process.env.REDSYS_ENV === 'production' ? 'production' : 'test';
   const url = env === 'production'

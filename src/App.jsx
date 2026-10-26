@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useContext } from 'react';
 import * as XLSX from 'xlsx';
-import { getData, setData, adminLogin, findStudent, upsertStudent, changeAdminPin } from './api.js';
+import { getData, setData, hasAdminToken, adminLogin, findStudent, upsertStudent, changeAdminPin } from './api.js';
 import { payWithRedsys } from './redsys.js';
 import { registerServiceWorker, subscribeToPush, unsubscribeFromPush, getCurrentSubscription, pushSupported } from './push.js';
 import { uploadWallImage, deleteWallImage } from './upload.js';
@@ -157,6 +157,17 @@ function applyFreeze(freeze, purchases, bookings) {
   return { nextPurchases, nextBookings, cancelled: toCancel.length };
 }
 
+// Los pagos con tarjeta se activan solos cuando el banco confirma el cobro. Si uno
+// sigue pendiente es que el banco NO lo ha cobrado: activarlo a mano da el
+// servicio sin cobrar, así que se pide confirmación expresa.
+function okToConfirmCardByHand(name, what) {
+  return confirm(`${name} eligió pagar con TARJETA y el banco todavía NO ha confirmado el cobro (si se hubiera cobrado, ${what} se habría activado solo).
+
+Si lo marcas como pagado, quedará activo sin ningún cobro registrado. Solo hazlo si has comprobado en el banco que el dinero ha entrado.
+
+¿Marcarlo como pagado igualmente?`);
+}
+
 // Reservas futuras de una clase concreta del horario semanal (por día de la semana, hora y nombre).
 function futureBookingsOfSlot(bookings, dayName, time, name) {
   const todayIso = isoDate(new Date());
@@ -240,6 +251,7 @@ export default function App() {
   const [toastMsg, setToastMsg] = useState(null);
   const [modal, setModal] = useState(null);
   const toastTimer = useRef(null);
+  const loadedRef = useRef({}); // colecciones leídas al menos una vez con éxito
 
   useEffect(() => {
     registerServiceWorker();
@@ -255,21 +267,23 @@ export default function App() {
         getData('schedule'), getData('bonos'), getData('settings'), getData('holidays'), getData('events'), getData('classCancellations'), getData('punctualClasses'), getData('freezes'), getData('resources')
       ]).then(([s, sp, b, p, w, pl, sch, bo, cfg, hol, ev, cc, pc, fz, rs]) => {
         if (cancelled) return;
-        if (isAdmin) setStudents(s || []);
-        if (isAdmin) setScheduledPosts(sp || []);
-        setBookings(b || []);
-        setPurchases(p || []);
-        setWallPosts(w || []);
-        setPolls(pl || []);
-        setHolidays(hol || []);
-        setEvents(ev || []);
-        setClassCancellations(cc || []);
-        setPunctualClasses(pc || []);
-        setFreezes(fz || []);
-        if (rs) setResources(rs);
-        if (sch) setSchedule(sch);
-        if (bo) setBonos(bo);
-        if (cfg) setSettings({ ...DEFAULT_SETTINGS, ...cfg });
+        // undefined = la lectura ha fallado: se conserva lo que ya había en pantalla (nunca se toma por "vacío").
+        const take = (key, value, apply) => { if (value !== undefined) { loadedRef.current[key] = true; apply(value); } };
+        if (isAdmin) take('students', s, v => setStudents(v || []));
+        if (isAdmin) take('scheduledPosts', sp, v => setScheduledPosts(v || []));
+        take('bookings', b, v => setBookings(v || []));
+        take('purchases', p, v => setPurchases(v || []));
+        take('wallPosts', w, v => setWallPosts(v || []));
+        take('polls', pl, v => setPolls(v || []));
+        take('holidays', hol, v => setHolidays(v || []));
+        take('events', ev, v => setEvents(v || []));
+        take('classCancellations', cc, v => setClassCancellations(v || []));
+        take('punctualClasses', pc, v => setPunctualClasses(v || []));
+        take('freezes', fz, v => setFreezes(v || []));
+        take('resources', rs, v => { if (v) setResources(v); });
+        take('schedule', sch, v => { if (v) setSchedule(v); });
+        take('bonos', bo, v => { if (v) setBonos(v); });
+        take('settings', cfg, v => { if (v) setSettings({ ...DEFAULT_SETTINGS, ...v }); });
         setLoading(false);
       }).catch(() => { if (!cancelled) setLoading(false); });
     }
@@ -295,21 +309,32 @@ export default function App() {
     toastTimer.current = setTimeout(() => setToastMsg(null), 2600);
   }
 
-  function saveStudents(next) { setStudents(next); setData('students', next, adminToken); }
-  function saveBookings(next) { setBookings(next); setData('bookings', next, adminToken); }
-  function savePurchases(next) { setPurchases(next); setData('purchases', next, adminToken); }
-  function saveWallPosts(next) { setWallPosts(next); setData('wallPosts', next, adminToken); }
-  function savePolls(next) { setPolls(next); setData('polls', next, adminToken); }
-  function saveHolidays(next) { setHolidays(next); setData('holidays', next, adminToken); }
-  function saveEvents(next) { setEvents(next); setData('events', next, adminToken); }
-  function saveScheduledPosts(next) { setScheduledPosts(next); setData('scheduledPosts', next, adminToken); }
-  function saveClassCancellations(next) { setClassCancellations(next); setData('classCancellations', next, adminToken); }
-  function savePunctualClasses(next) { setPunctualClasses(next); setData('punctualClasses', next, adminToken); }
-  function saveFreezes(next) { setFreezes(next); setData('freezes', next, adminToken); }
-  function saveResources(next) { setResources(next); setData('resources', next, adminToken); }
-  function saveSchedule(next) { setSchedule(next); setData('schedule', next, adminToken); }
-  function saveBonos(next) { setBonos(next); setData('bonos', next, adminToken); }
-  function saveSettings(next) { setSettings(next); setData('settings', next, adminToken); }
+  // Guarda una colección. Si todavía no se ha podido leer del servidor no escribe
+  // (podría pisar los datos reales con una lista vacía). Con localOnly solo se
+  // actualiza la pantalla: lo usan las alumnas para el bono, que lo controla el servidor.
+  function persist(key, setter, next, opts) {
+    if (!loadedRef.current[key]) {
+      toast('Los datos aún no se han cargado del todo. Espera unos segundos e inténtalo de nuevo.');
+      return Promise.resolve(false);
+    }
+    setter(next);
+    return opts && opts.localOnly ? Promise.resolve(true) : setData(key, next, adminToken);
+  }
+  function saveStudents(next) { return persist('students', setStudents, next); }
+  function saveBookings(next) { return persist('bookings', setBookings, next); }
+  function savePurchases(next, opts) { return persist('purchases', setPurchases, next, opts); }
+  function saveWallPosts(next) { return persist('wallPosts', setWallPosts, next); }
+  function savePolls(next) { return persist('polls', setPolls, next); }
+  function saveHolidays(next) { return persist('holidays', setHolidays, next); }
+  function saveEvents(next) { return persist('events', setEvents, next); }
+  function saveScheduledPosts(next) { return persist('scheduledPosts', setScheduledPosts, next); }
+  function saveClassCancellations(next) { return persist('classCancellations', setClassCancellations, next); }
+  function savePunctualClasses(next) { return persist('punctualClasses', setPunctualClasses, next); }
+  function saveFreezes(next) { return persist('freezes', setFreezes, next); }
+  function saveResources(next) { return persist('resources', setResources, next); }
+  function saveSchedule(next) { return persist('schedule', setSchedule, next); }
+  function saveBonos(next) { return persist('bonos', setBonos, next); }
+  function saveSettings(next) { return persist('settings', setSettings, next); }
   function pickProfile(id) { setMyId(id); localStorage.setItem('aditi_myId', id); }
   function clearProfile() { setMyId(null); localStorage.removeItem('aditi_myId'); }
 
@@ -916,7 +941,8 @@ function MyUpcomingBookings({ me, bookings, saveBookings, purchases, savePurchas
       ? `¿Cancelar tu reserva de ${b.className} el ${fmtDate(new Date(b.date))}?\n\nComo faltan menos de ${LATE_CANCEL_HOURS} horas para la clase, se descontará igualmente de tu bono.`
       : `¿Cancelar tu reserva de ${b.className} el ${fmtDate(new Date(b.date))}?`;
     if (!confirm(msg)) return;
-    const late = cancelBookingAndRefund(b, bookings, saveBookings, purchases, savePurchases);
+    // Con sesión de alumna, las clases del bono las ajusta el servidor (aquí solo se refleja en pantalla).
+    const late = cancelBookingAndRefund(b, bookings, saveBookings, purchases, hasAdminToken() ? savePurchases : (next) => savePurchases(next, { localOnly: true }));
     toast(late && b.paymentMethod === 'bono' ? 'Reserva cancelada. Se ha descontado del bono por ser con poca antelación.' : 'Reserva cancelada');
   }
 
@@ -1527,12 +1553,13 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
               const s = students.find(x => x.id === p.studentId);
               return (
                 <div className="card" key={p.id}>
-                  <h3>{bonoName(bonos, p.bonoId)}{p.trimestre && ' · Trimestre'} <span className="pill pill-lav">{p.paymentMethod === 'redsys' ? 'Tarjeta' : 'Bizum'}</span></h3>
+                  <h3>{bonoName(bonos, p.bonoId)}{p.trimestre && ' · Trimestre'} <span className="pill pill-lav">{p.paymentMethod === 'redsys' ? 'Tarjeta · sin cobro del banco' : 'Bizum'}</span></h3>
                   <p className="muted">{s ? s.name : 'Alumna eliminada'} · {s ? s.phone : ''}</p>
                   <p className="muted">Solicitado el {fmtDate(new Date(p.purchaseDate))}</p>
                   <div className="row" style={{ marginTop: 8 }}>
                     <button className="btn btn-sage btn-sm" onClick={() => {
-                      const next = purchases.map(x => x.id === p.id ? { ...x, status: 'confirmado', expiryDate: addDays(new Date(), p.trimestre ? 90 : 30).toISOString() } : x);
+                      if (p.paymentMethod === 'redsys' && !okToConfirmCardByHand(s ? s.name : 'Esta alumna', 'el bono')) return;
+                      const next = purchases.map(x => x.id === p.id ? { ...x, status: 'confirmado', confirmedManually: true, expiryDate: addDays(new Date(), p.trimestre ? 90 : 30).toISOString() } : x);
                       savePurchases(next);
                       toast('Bono confirmado');
                     }}>Marcar como pagado</button>
@@ -1557,10 +1584,11 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
                   <p className="muted">Del {fmtIso(f.startDate)} al {fmtIso(f.endDate)} ({f.days} días) · {f.price}€</p>
                   <div className="row" style={{ marginTop: 8 }}>
                     <button className="btn btn-sage btn-sm" disabled={!p || p.status !== 'confirmado'} onClick={() => {
+                      if (f.paymentMethod === 'redsys' && !okToConfirmCardByHand(s ? s.name : 'Esta alumna', 'la congelación')) return;
                       const { nextPurchases, nextBookings, cancelled } = applyFreeze(f, purchases, bookings);
                       savePurchases(nextPurchases);
                       if (cancelled > 0) saveBookings(nextBookings);
-                      saveFreezes(freezes.map(x => x.id === f.id ? { ...x, status: 'confirmado' } : x));
+                      saveFreezes(freezes.map(x => x.id === f.id ? { ...x, status: 'confirmado', confirmedManually: true } : x));
                       toast(cancelled > 0 ? `Congelación confirmada. Se han cancelado y devuelto ${cancelled} clase${cancelled === 1 ? '' : 's'} reservada${cancelled === 1 ? '' : 's'} en esas fechas.` : 'Congelación confirmada');
                     }}>Marcar como pagada</button>
                     <button className="btn btn-outline btn-sm" onClick={() => {
@@ -1582,7 +1610,8 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
                   <p className="muted">{s ? s.name : 'Alumna eliminada'} · {fmtDate(new Date(b.date))} {b.time}</p>
                   <div className="row" style={{ marginTop: 8 }}>
                     <button className="btn btn-sage btn-sm" onClick={() => {
-                      const next = bookings.map(x => x.id === b.id ? { ...x, status: 'confirmada' } : x);
+                      if (b.paymentMethod === 'redsys' && !okToConfirmCardByHand(s ? s.name : 'Esta alumna', 'la reserva')) return;
+                      const next = bookings.map(x => x.id === b.id ? { ...x, status: 'confirmada', confirmedManually: true } : x);
                       saveBookings(next);
                       toast('Clase suelta confirmada');
                     }}>Marcar como pagada</button>
@@ -1613,6 +1642,9 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
                     <p className="muted">Clases: <b>{p.classesTotal === null ? 'Ilimitadas' : `${p.classesUsed || 0} de ${p.classesTotal} usadas`}</b></p>
                     <div className="row" style={{ marginTop: 8, alignItems: 'center' }}>
                       <span className={`pill ${vencido ? 'pill-gray' : 'pill-sage'}`}>{vencido ? 'Caducado' : `Válido hasta ${fmtDate(new Date(p.expiryDate))}`}</span>
+                      {p.payment?.order && <span className="pill pill-sage">Cobro confirmado por el banco ({p.price}€)</span>}
+                      {p.confirmedManually && <span className="pill pill-peach">Confirmado a mano</span>}
+                      {p.paymentMethod === 'redsys' && !p.payment?.order && !p.confirmedManually && <span className="pill pill-gray">Tarjeta (sin justificante guardado)</span>}
                       {freezesOf(freezes, p.id).filter(f => f.status === 'confirmado' && f.endDate >= isoDate(new Date())).map(f => (
                         <span key={f.id} className="pill pill-lav">Congelado {fmtIso(f.startDate)} → {fmtIso(f.endDate)}</span>
                       ))}
@@ -3049,16 +3081,21 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
     if (submittingRef.current) return;
     submittingRef.current = true;
     const next = purchases.map(p => p.id === purchaseId ? { ...p, classesUsed: (p.classesUsed || 0) + (p.classesTotal === null ? 0 : 1) } : p);
-    savePurchases(next);
+    // Con sesión de alumna, el servidor descuenta la clase del bono al guardar la reserva.
+    savePurchases(next, { localOnly: !hasAdminToken() });
     saveBookings([...bookings, { id: uid(), studentId: me.id, day, time: cls.time, className: cls.name, date: dateIso, status: 'confirmada', paymentMethod: 'bono', purchaseId, createdAt: new Date().toISOString() }]);
     toast('Clase reservada con tu bono');
     onClose();
   }
-  function confirmBookingSuelta(studentId) {
+  async function confirmBookingSuelta(studentId) {
     if (submittingRef.current) return;
     submittingRef.current = true;
     const booking = { id: uid(), studentId, day, time: cls.time, className: cls.name, date: dateIso, status: 'pendiente_pago', paymentMethod: 'bizum', price: settings.claseSueltaPrice, createdAt: new Date().toISOString() };
-    saveBookings([...bookings, booking]);
+    if (!(await saveBookings([...bookings, booking]))) {
+      submittingRef.current = false;
+      toast('No se ha podido reservar la clase (quizá se acaba de completar).');
+      return;
+    }
     toast(`Reserva registrada. Haz el Bizum al ${settings.bizumPhone} y Beatriz lo confirmará`);
     onClose();
     return booking;
@@ -3067,7 +3104,12 @@ function BookingModal({ modal, bookings, saveBookings, purchases, savePurchases,
     if (submittingRef.current) return;
     submittingRef.current = true;
     const booking = { id: uid(), studentId, day, time: cls.time, className: cls.name, date: dateIso, status: 'pendiente_pago', paymentMethod: 'redsys', price: settings.claseSueltaPrice, createdAt: new Date().toISOString() };
-    saveBookings([...bookings, booking]);
+    // Solo se va al banco si la reserva se ha guardado de verdad (por ejemplo, no si la clase se acaba de llenar).
+    if (!(await saveBookings([...bookings, booking]))) {
+      submittingRef.current = false;
+      toast('No se ha podido reservar la clase (quizá se acaba de completar). No se ha cobrado nada.');
+      return;
+    }
     try {
       await payWithRedsys({ kind: 'suelta', itemId: booking.id, studentId, amount: settings.claseSueltaPrice, concept: `${cls.name} (${day} ${cls.time})` });
     } catch (e) {
@@ -3276,7 +3318,7 @@ function BonoModal({ modal, me, purchases, savePurchases, toast, onClose }) {
   // otra si vuelve a intentarlo tras cerrar y reabrir (p.ej. pago abandonado).
   const submittingRef = useRef(false);
 
-  function createPendingPurchase(paymentMethod) {
+  async function createPendingPurchase(paymentMethod) {
     const existing = purchases.find(p => p.studentId === me.id && p.bonoId === b.id && p.trimestre === trimestre && p.status === 'pendiente');
     if (existing) return existing;
     const purchase = {
@@ -3284,15 +3326,20 @@ function BonoModal({ modal, me, purchases, savePurchases, toast, onClose }) {
       classesTotal, classesUsed: 0,
       status: 'pendiente', paymentMethod, purchaseDate: new Date().toISOString(), expiryDate: addDays(new Date(), termDays).toISOString()
     };
-    savePurchases([...purchases, purchase]);
-    return purchase;
+    return (await savePurchases([...purchases, purchase])) ? purchase : null;
   }
 
   async function handleCardPayment() {
     if (submittingRef.current) return;
     submittingRef.current = true;
     setPaying(true);
-    const purchase = createPendingPurchase('redsys');
+    const purchase = await createPendingPurchase('redsys');
+    if (!purchase) {
+      submittingRef.current = false;
+      setPaying(false);
+      toast('No se ha podido registrar la solicitud. No se ha cobrado nada; inténtalo de nuevo.');
+      return;
+    }
     try {
       await payWithRedsys({ kind: 'bono', itemId: purchase.id, studentId: me.id, amount: price, concept: label });
     } catch (e) {
@@ -3301,10 +3348,14 @@ function BonoModal({ modal, me, purchases, savePurchases, toast, onClose }) {
       toast('No se pudo iniciar el pago con tarjeta. Puedes pagar por Bizum.');
     }
   }
-  function handleBizum() {
+  async function handleBizum() {
     if (submittingRef.current) return;
     submittingRef.current = true;
-    createPendingPurchase('bizum');
+    if (!(await createPendingPurchase('bizum'))) {
+      submittingRef.current = false;
+      toast('No se ha podido registrar la solicitud. Inténtalo de nuevo.');
+      return;
+    }
     toast(`Bono solicitado. Haz el Bizum al ${settings.bizumPhone} y Beatriz lo confirmará`);
     onClose();
   }
@@ -3337,20 +3388,25 @@ function EventModal({ modal, me, bookings, saveBookings, toast, onClose }) {
   const already = bookings.some(b => b.studentId === me.id && b.date === ev.date && b.time === ev.time && b.className === ev.name && occupiesSpot(b.status));
   const past = isPastSlot(ev.date, ev.time);
 
-  function createBooking(paymentMethod) {
+  async function createBooking(paymentMethod) {
     const booking = {
       id: uid(), studentId: me.id, day: dayNameForDate(new Date(`${ev.date}T12:00:00`)), time: ev.time, className: ev.name,
       date: ev.date, status: 'pendiente_pago', paymentMethod, price: ev.price, eventId: ev.id, createdAt: new Date().toISOString()
     };
-    saveBookings([...bookings, booking]);
-    return booking;
+    return (await saveBookings([...bookings, booking])) ? booking : null;
   }
 
   async function handleCardPayment() {
     if (submittingRef.current) return;
     submittingRef.current = true;
     setPaying(true);
-    const booking = createBooking('redsys');
+    const booking = await createBooking('redsys');
+    if (!booking) {
+      submittingRef.current = false;
+      setPaying(false);
+      toast('No se ha podido reservar (quizá se acaba de completar). No se ha cobrado nada.');
+      return;
+    }
     try {
       await payWithRedsys({ kind: 'suelta', itemId: booking.id, studentId: me.id, amount: ev.price, concept: ev.name });
     } catch (e) {
@@ -3359,21 +3415,29 @@ function EventModal({ modal, me, bookings, saveBookings, toast, onClose }) {
       toast('No se pudo iniciar el pago con tarjeta. Puedes pagar por Bizum.');
     }
   }
-  function handleFree() {
+  async function handleFree() {
     if (submittingRef.current) return;
     submittingRef.current = true;
     const booking = {
       id: uid(), studentId: me.id, day: dayNameForDate(new Date(`${ev.date}T12:00:00`)), time: ev.time, className: ev.name,
       date: ev.date, status: 'confirmada', paymentMethod: 'gratis', price: 0, eventId: ev.id, createdAt: new Date().toISOString()
     };
-    saveBookings([...bookings, booking]);
+    if (!(await saveBookings([...bookings, booking]))) {
+      submittingRef.current = false;
+      toast('No se ha podido apuntar (quizá se acaba de completar). Inténtalo de nuevo.');
+      return;
+    }
     toast(`¡Apuntada a ${ev.name}!`);
     onClose();
   }
-  function handleBizum() {
+  async function handleBizum() {
     if (submittingRef.current) return;
     submittingRef.current = true;
-    createBooking('bizum');
+    if (!(await createBooking('bizum'))) {
+      submittingRef.current = false;
+      toast('No se ha podido apuntar (quizá se acaba de completar). Inténtalo de nuevo.');
+      return;
+    }
     toast(`Apuntada a ${ev.name}. Haz el Bizum al ${settings.bizumPhone} y Beatriz lo confirmará`);
     onClose();
   }
@@ -3430,19 +3494,24 @@ function FreezeModal({ modal, me, bookings, toast, onClose }) {
     if (clash.length > 0) error = `Tienes ${clash.length} clase${clash.length === 1 ? '' : 's'} reservada${clash.length === 1 ? '' : 's'} con tu bono en esas fechas. Cancélala${clash.length === 1 ? '' : 's'} primero desde Perfil → Mis próximas clases.`;
   }
 
-  function createFreeze(paymentMethod) {
+  async function createFreeze(paymentMethod) {
     const freeze = {
       id: uid(), purchaseId: purchase.id, studentId: me.id, startDate, endDate, days,
       price: settings.freezePrice, paymentMethod, status: 'pendiente', by: 'alumna', createdAt: new Date().toISOString()
     };
-    saveFreezes([...freezes, freeze]);
-    return freeze;
+    return (await saveFreezes([...freezes, freeze])) ? freeze : null;
   }
   async function handleCardPayment() {
     if (submittingRef.current || error) return;
     submittingRef.current = true;
     setPaying(true);
-    const freeze = createFreeze('redsys');
+    const freeze = await createFreeze('redsys');
+    if (!freeze) {
+      submittingRef.current = false;
+      setPaying(false);
+      toast('No se ha podido registrar la solicitud. No se ha cobrado nada; inténtalo de nuevo.');
+      return;
+    }
     try {
       await payWithRedsys({ kind: 'freeze', itemId: freeze.id, studentId: me.id, amount: settings.freezePrice, concept: `Congelar bono (${days} días)` });
     } catch (e) {
@@ -3451,10 +3520,14 @@ function FreezeModal({ modal, me, bookings, toast, onClose }) {
       toast('No se pudo iniciar el pago con tarjeta. Puedes pagar por Bizum.');
     }
   }
-  function handleBizum() {
+  async function handleBizum() {
     if (submittingRef.current || error) return;
     submittingRef.current = true;
-    createFreeze('bizum');
+    if (!(await createFreeze('bizum'))) {
+      submittingRef.current = false;
+      toast('No se ha podido registrar la solicitud. Inténtalo de nuevo.');
+      return;
+    }
     toast(`Congelación solicitada. Haz el Bizum al ${settings.bizumPhone} y Beatriz la confirmará`);
     onClose();
   }
