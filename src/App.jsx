@@ -951,6 +951,65 @@ function MyBonoCard({ me, purchases, activePurchaseFor, bonos }) {
   );
 }
 
+// Historial de clases de una alumna. "Realizada" = reserva confirmada de una clase
+// que ya ha pasado (la app no registra asistencia, solo reservas).
+function classHistoryKind(b) {
+  if (b.status === 'cancelada') return 'canceladas';
+  if (b.status === 'en_espera') return 'espera';
+  if (!isPastSlot(b.date, b.time)) return 'proximas';
+  return b.status === 'confirmada' ? 'realizadas' : 'sinpagar';
+}
+function bookingPayLabel(b, purchases, bonos) {
+  if (b.paymentMethod === 'bono') {
+    const p = purchases.find(x => x.id === b.purchaseId);
+    return p ? `${bonoName(bonos, p.bonoId)}${p.trimestre ? ' (trimestre)' : ''}` : 'Bono';
+  }
+  return PAYMENT_LABELS[b.paymentMethod] || b.paymentMethod || '';
+}
+function ClassHistory({ studentId, bookings, purchases, bonos, admin }) {
+  const [filter, setFilter] = useState('realizadas');
+  const mine = bookings.filter(b => b.studentId === studentId);
+  const count = (k) => mine.filter(b => classHistoryKind(b) === k).length;
+  const filters = admin
+    ? [['realizadas', 'Realizadas'], ['proximas', 'Próximas'], ['canceladas', 'Canceladas'], ['todas', 'Todas']]
+    : [['realizadas', 'Realizadas'], ['proximas', 'Próximas']];
+  const list = mine.filter(b => filter === 'todas' || classHistoryKind(b) === filter)
+    .sort((a, b) => (filter === 'proximas' ? 1 : -1) * `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`));
+  const KIND = { realizadas: ['Realizada', 'pill-sage'], proximas: ['Próxima', 'pill-lav'], canceladas: ['Cancelada', 'pill-gray'], espera: ['En espera', 'pill-peach'], sinpagar: ['Sin pagar', 'pill-peach'] };
+  let lastMonth = '';
+  return (
+    <>
+      <div className="row" style={{ marginBottom: 6 }}>
+        <span className="pill pill-sage">{count('realizadas')} realizadas</span>
+        <span className="pill pill-lav">{count('proximas')} próximas</span>
+        {admin && <span className="pill pill-gray">{count('canceladas')} canceladas</span>}
+      </div>
+      <div className="daychips" style={{ marginBottom: 6 }}>
+        {filters.map(([k, label]) => <div key={k} className={`chip ${filter === k ? 'active' : ''}`} onClick={() => setFilter(k)}>{label}</div>)}
+      </div>
+      {list.length === 0 ? <p className="muted">No hay clases en esta lista.</p> : list.map(b => {
+        const month = capitalizeFirst(new Date(`${b.date}T12:00:00`).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }));
+        const header = month !== lastMonth ? <div className="muted" style={{ fontWeight: 600, margin: '10px 0 2px' }}>{month}</div> : null;
+        lastMonth = month;
+        const [label, cls] = KIND[classHistoryKind(b)];
+        return (
+          <React.Fragment key={b.id}>
+            {header}
+            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid var(--line)', opacity: b.status === 'cancelada' ? 0.6 : 1 }}>
+              <span>
+                {fmtIso(b.date)} · {b.time} · <b>{b.className}</b>
+                <span className="muted"> · {bookingPayLabel(b, purchases, bonos)}</span>
+              </span>
+              <span className={`pill ${cls}`}>{label}</span>
+            </div>
+          </React.Fragment>
+        );
+      })}
+      {admin && <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>"Realizada" = reserva confirmada de una clase que ya ha pasado. La app no registra si vino o no.</p>}
+    </>
+  );
+}
+
 function MyUpcomingBookings({ me, bookings, saveBookings, purchases, savePurchases, toast }) {
   const upcoming = bookings
     .filter(b => b.studentId === me.id && b.status !== 'cancelada' && new Date(b.date) >= addDays(new Date(), -1))
@@ -1030,6 +1089,8 @@ function PerfilTab({ me, pickProfile, clearProfile, purchases, savePurchases, bo
           </div>
           <MyBonoCard me={me} purchases={purchases} activePurchaseFor={activePurchaseFor} bonos={bonos} />
           <MyUpcomingBookings me={me} bookings={bookings} saveBookings={saveBookings} purchases={purchases} savePurchases={savePurchases} toast={toast} />
+          <div className="sectionlabel">Mi historial de clases</div>
+          <div className="card"><ClassHistory studentId={me.id} bookings={bookings} purchases={purchases} bonos={bonos} /></div>
           <div className="sectionlabel">Editar datos</div>
           <ProfileForm existing={me} onSave={handleSave} />
           <hr className="sep" />
@@ -1183,7 +1244,9 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
             [...purchases].filter(p => p.studentId === s.id)
               .sort((a, b) => new Date(b.purchaseDate) - new Date(a.purchaseDate))
               .map(p => <AdminBonoEditRow key={p.id} p={p} bonos={bonos} purchases={purchases} savePurchases={savePurchases} bookings={bookings} saveBookings={saveBookings} toast={toast} />)}
-          <div className="sectionlabel">Sus reservas</div>
+          <div className="sectionlabel">Historial de clases</div>
+          <ClassHistory admin studentId={s.id} bookings={bookings} purchases={purchases} bonos={bonos} />
+          <div className="sectionlabel">Sus reservas (editar o cancelar)</div>
           {bookings.filter(b => b.studentId === s.id).length === 0 ? <p className="muted">Sin reservas todavía.</p> :
             [...bookings].filter(b => b.studentId === s.id)
               .sort((a, b) => new Date(b.date) - new Date(a.date))
