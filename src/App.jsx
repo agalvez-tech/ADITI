@@ -1152,6 +1152,7 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
   const [showDetail, setShowDetail] = useState(false);
   const [bonoId, setBonoId] = useState('');
   const [trimestre, setTrimestre] = useState(false);
+  const [manualPrice, setManualPrice] = useState(''); // vacío = precio de catálogo
   const [payMethod, setPayMethod] = useState('');
   const [purchaseDateStr, setPurchaseDateStr] = useState(() => isoDate(new Date()));
 
@@ -1171,21 +1172,26 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
   function handleAssignBono() {
     const b = bonos.find(x => x.id === bonoId);
     if (!b) { toast('Elige un bono'); return; }
-    const tri = trimestre ? bonoTrimestre(b) : null;
+    // El trimestre se ofrece en todos los bonos; si el bono no tiene precio de trimestre propio, se propone 3 mensualidades.
+    const triPrice = bonoTrimestre(b)?.price ?? b.price * 3;
+    const tri = trimestre ? { price: triPrice } : null;
+    const customPrice = manualPrice.trim() === '' ? null : Number(manualPrice);
+    if (customPrice !== null && !(customPrice >= 0)) { toast('Revisa el importe'); return; }
     const realPurchaseDate = purchaseDateStr ? new Date(`${purchaseDateStr}T12:00:00`) : new Date();
     const purchase = {
       id: uid(), studentId: s.id, bonoId: b.id, trimestre: !!tri,
-      price: tri ? tri.price : b.price,
+      price: customPrice ?? (tri ? tri.price : b.price),
       classesTotal: b.classes === null ? null : (tri ? b.classes * 3 : b.classes),
-      classesUsed: 0, status: 'confirmado', paymentMethod: payMethod,
+      classesUsed: 0, status: 'confirmado', paymentMethod: payMethod, confirmedManually: true,
       purchaseDate: realPurchaseDate.toISOString(), expiryDate: addDays(realPurchaseDate, tri ? 90 : 30).toISOString()
     };
     savePurchases([...purchases, purchase]);
     setAssigningBono(false);
     setBonoId('');
     setTrimestre(false);
+    setManualPrice('');
     setPurchaseDateStr(isoDate(new Date()));
-    toast(`${b.name} dado de alta${payMethod ? ` (${payMethod})` : ''} para ${s.name}`);
+    toast(`${b.name}${tri ? ' trimestral' : ''} dado de alta${payMethod ? ` (${payMethod})` : ''} para ${s.name}`);
   }
 
   const sueltaOptions = classesForDate(sueltaDate, classInfo || {});
@@ -1232,7 +1238,7 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
       </div>
       <div className="row" style={{ marginTop: 10 }}>
         <button className="linklike" onClick={() => setEditing(true)}>Editar</button>
-        <button className="linklike" onClick={() => { setAssigningBono(!assigningBono); setAssigningSuelta(false); }}>{assigningBono ? 'Cancelar' : '+ Bono en efectivo'}</button>
+        <button className="linklike" onClick={() => { setAssigningBono(!assigningBono); setAssigningSuelta(false); }}>{assigningBono ? 'Cancelar' : '+ Bono manual (pagado fuera)'}</button>
         <button className="linklike" onClick={() => { setAssigningSuelta(!assigningSuelta); setAssigningBono(false); }}>{assigningSuelta ? 'Cancelar' : '+ Clase suelta'}</button>
         <button className="linklike" onClick={() => setShowDetail(!showDetail)}>{showDetail ? 'Ocultar bonos y reservas' : 'Ver bonos y reservas'}</button>
         <button className="linklike" style={{ color: 'var(--danger)' }} onClick={handleDelete}>Eliminar</button>
@@ -1280,17 +1286,27 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
             <option value="">Selecciona un bono</option>
             {bonos.map(b => <option key={b.id} value={b.id}>{b.name} · {b.price}€</option>)}
           </select>
-          {bonoId && bonoTrimestre(bonos.find(x => x.id === bonoId)) && (
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
-              <input type="checkbox" style={{ width: 'auto' }} checked={trimestre} onChange={e => setTrimestre(e.target.checked)} />
-              Trimestre ({bonoTrimestre(bonos.find(x => x.id === bonoId)).price}€, 3 meses)
-            </label>
-          )}
+          {bonoId && (() => {
+            const b = bonos.find(x => x.id === bonoId);
+            const triP = bonoTrimestre(b)?.price ?? b.price * 3;
+            return (
+              <>
+                <label>Duración</label>
+                <div className="row">
+                  <div className={`chip ${!trimestre ? 'active' : ''}`} onClick={() => setTrimestre(false)}>Mensual · {b.price}€</div>
+                  <div className={`chip ${trimestre ? 'active' : ''}`} onClick={() => setTrimestre(true)}>Trimestral (3 meses) · {triP}€</div>
+                </div>
+                <label>Importe cobrado (€) — vacío = {trimestre ? triP : b.price}€</label>
+                <input type="number" min="0" value={manualPrice} onChange={e => setManualPrice(e.target.value)} placeholder={String(trimestre ? triP : b.price)} />
+              </>
+            );
+          })()}
           <label>Método de pago</label>
           <select value={payMethod} onChange={e => setPayMethod(e.target.value)}>
             <option value="">Sin especificar</option>
             <option value="efectivo">Efectivo</option>
             <option value="transferencia">Transferencia</option>
+            <option value="bizum">Bizum</option>
           </select>
           <label>Fecha real de la compra</label>
           <input type="date" value={purchaseDateStr} max={isoDate(new Date())} onChange={e => setPurchaseDateStr(e.target.value)} />
