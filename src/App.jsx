@@ -753,7 +753,19 @@ function BonosTab({ me, activePurchaseFor, purchases, bonos, events, bookings, o
                 </p>
               ))}
               {hasPendingFreeze ? (
-                <p className="muted" style={{ marginTop: 6 }}>Cuando Beatriz confirme tu pago, tu bono quedará congelado y se alargará esos días.</p>
+                <>
+                  {activeFreezes.filter(f => f.status === 'pendiente' && f.paymentMethod === 'redsys').map(f => (
+                    <div key={f.id}>
+                      <p className="muted" style={{ marginTop: 6 }}>El pago con tarjeta no se ha completado, así que el bono todavía no está congelado.</p>
+                      <button className="btn btn-primary btn-sm" style={{ marginTop: 6 }} onClick={() => payWithRedsys({ kind: 'freeze', itemId: f.id, studentId: me.id, concept: `Congelar bono (${f.days} días)` }).catch(() => alert('No se pudo iniciar el pago. Inténtalo de nuevo o avisa a Beatriz.'))}>
+                        Reintentar el pago · {f.price}€
+                      </button>
+                    </div>
+                  ))}
+                  {activeFreezes.some(f => f.status === 'pendiente' && f.paymentMethod !== 'redsys') && (
+                    <p className="muted" style={{ marginTop: 6 }}>Cuando Beatriz confirme tu pago, tu bono quedará congelado y se alargará esos días.</p>
+                  )}
+                </>
               ) : (
                 <button className="linklike" style={{ marginTop: 8 }} onClick={() => onRequestFreeze(active)}>
                   Congelar mi bono · {settings.freezePrice}€
