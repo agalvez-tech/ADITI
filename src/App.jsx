@@ -1152,6 +1152,7 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
   const [showDetail, setShowDetail] = useState(false);
   const [bonoId, setBonoId] = useState('');
   const [trimestre, setTrimestre] = useState(false);
+  const [manualUsed, setManualUsed] = useState(''); // clases que ya había hecho antes de dar de alta el bono
   const [manualPrice, setManualPrice] = useState(''); // vacío = precio de catálogo
   const [payMethod, setPayMethod] = useState('');
   const [purchaseDateStr, setPurchaseDateStr] = useState(() => isoDate(new Date()));
@@ -1177,12 +1178,15 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
     const tri = trimestre ? { price: triPrice } : null;
     const customPrice = manualPrice.trim() === '' ? null : Number(manualPrice);
     if (customPrice !== null && !(customPrice >= 0)) { toast('Revisa el importe'); return; }
+    const alreadyUsed = manualUsed.trim() === '' ? 0 : Math.floor(Number(manualUsed));
+    const totalClasses = b.classes === null ? null : (tri ? b.classes * 3 : b.classes);
+    if (!(alreadyUsed >= 0) || (totalClasses !== null && alreadyUsed > totalClasses)) { toast('Revisa las clases ya usadas'); return; }
     const realPurchaseDate = purchaseDateStr ? new Date(`${purchaseDateStr}T12:00:00`) : new Date();
     const purchase = {
       id: uid(), studentId: s.id, bonoId: b.id, trimestre: !!tri,
       price: customPrice ?? (tri ? tri.price : b.price),
       classesTotal: b.classes === null ? null : (tri ? b.classes * 3 : b.classes),
-      classesUsed: 0, status: 'confirmado', paymentMethod: payMethod, confirmedManually: true,
+      classesUsed: b.classes === null ? 0 : alreadyUsed, status: 'confirmado', paymentMethod: payMethod, confirmedManually: true,
       purchaseDate: realPurchaseDate.toISOString(), expiryDate: addDays(realPurchaseDate, tri ? 90 : 30).toISOString()
     };
     savePurchases([...purchases, purchase]);
@@ -1190,6 +1194,7 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
     setBonoId('');
     setTrimestre(false);
     setManualPrice('');
+    setManualUsed('');
     setPurchaseDateStr(isoDate(new Date()));
     toast(`${b.name}${tri ? ' trimestral' : ''} dado de alta${payMethod ? ` (${payMethod})` : ''} para ${s.name}`);
   }
@@ -1301,6 +1306,9 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
               </>
             );
           })()}
+          <label>Clases que ya ha hecho y se descuentan de este bono (opcional)</label>
+          <input type="number" min="0" value={manualUsed} onChange={e => setManualUsed(e.target.value)} placeholder="0" />
+          <p className="muted" style={{ marginTop: 4 }}>Por ejemplo, si hizo una clase suelta hoy y después compra el bono, pon 1.</p>
           <label>Método de pago</label>
           <select value={payMethod} onChange={e => setPayMethod(e.target.value)}>
             <option value="">Sin especificar</option>
