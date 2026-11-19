@@ -773,7 +773,17 @@ function BonosTab({ me, activePurchaseFor, purchases, bonos, events, bookings, o
               )}
             </div>
           ) : pendiente ? (
-            <div className="card"><h3>{bonoName(bonos, pendiente.bonoId)}{pendiente.trimestre && ' · Trimestre'}</h3><p className="muted">Solicitado, pendiente de confirmar el pago con Beatriz.</p></div>
+            <div className="card">
+              <h3>{bonoName(bonos, pendiente.bonoId)}{pendiente.trimestre && ' · Trimestre'}</h3>
+              {pendiente.paymentMethod === 'redsys' ? (
+                <>
+                  <p className="muted">El pago con tarjeta no se ha completado, así que todavía no tienes este bono.</p>
+                  <button className="btn btn-primary btn-sm" style={{ marginTop: 6 }} onClick={() => payWithRedsys({ kind: 'bono', itemId: pendiente.id, studentId: me.id, concept: bonoName(bonos, pendiente.bonoId) }).catch(() => alert('No se pudo iniciar el pago. Inténtalo de nuevo o avisa a Beatriz.'))}>
+                    Pagar con tarjeta · {pendiente.price}€
+                  </button>
+                </>
+              ) : <p className="muted">Solicitado, pendiente de confirmar el pago con Beatriz.</p>}
+            </div>
           ) : (
             <div className="empty">No tienes ningún bono activo ahora mismo.</div>
           )}
@@ -1405,7 +1415,7 @@ function AdminBonoEditRow({ p, bonos, purchases, savePurchases, bookings, saveBo
     <div className="card" style={{ marginTop: 8 }}>
       <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
         <h3 style={{ margin: 0 }}>{bonoName(bonos, p.bonoId)}{p.trimestre && ' · Trimestre'}</h3>
-        <span className={`pill ${statusPill}`}>{p.status}{p.status === 'confirmado' && vencido ? ' (caducado)' : ''}</span>
+        <span className={`pill ${statusPill}`}>{p.status === 'pendiente' ? 'pendiente de pago · NO activo' : p.status}{p.status === 'confirmado' && vencido ? ' (caducado)' : ''}</span>
       </div>
       {editing ? (
         <>
