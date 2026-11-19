@@ -1,7 +1,26 @@
 import { Redis } from '@upstash/redis';
-import { notifyBonoConfirmado, notifySueltaConfirmada } from './_brevo.js';
+import { notifyBonoConfirmado, notifySueltaConfirmada, notifyPagoFallido } from './_brevo.js';
 
 const redis = Redis.fromEnv();
+
+const ITEM_COLLECTION = { bono: 'purchases', suelta: 'bookings', freeze: 'freezes' };
+const ITEM_LABEL = { bono: 'Bono', suelta: 'Clase suelta', freeze: 'Congelación de bono' };
+
+// Avisa a Beatriz de un pago fallido (una sola vez por orden, aunque Redsys
+// avise por servidor y por retorno del navegador). Nunca debe romper el cobro.
+async function alertFailedPayment(params, reason) {
+  try {
+    const { kind, itemId, studentId } = JSON.parse(decodeURIComponent(params.Ds_MerchantData));
+    const order = params.Ds_Order || params.Ds_Merchant_Order || `${kind}:${itemId}`;
+    if (!(await redis.set(`payFailAlert:${order}`, '1', { nx: true, ex: 86400 }))) return;
+    const item = ((await redis.get(ITEM_COLLECTION[kind])) || []).find(x => x.id === itemId);
+    const student = ((await redis.get('students')) || []).find(s => s.id === studentId);
+    const detail = item ? (kind === 'suelta' ? item.className : kind === 'bono' ? item.bonoId : `${item.days} días`) : '';
+    await notifyPagoFallido(student, { concept: `${ITEM_LABEL[kind] || 'Pago'}${detail ? ` · ${detail}` : ''}`, amount: item && item.price, reason });
+  } catch (e) {
+    console.error('Redsys: no se pudo avisar del pago fallido', e);
+  }
+}
 
 // Aplica el resultado de un pago Redsys ya verificado (firma correcta) a purchases/bookings.
 // Devuelve true si el pago fue autorizado por el banco.
@@ -25,6 +44,7 @@ export async function confirmPaymentFromParams(params) {
     const amountMatches = (price) => paidCents === null || !(Number(price) > 0) || paidCents === Math.round(Number(price) * 100);
     const reject = async (what, item) => {
       console.error(`Redsys: importe cobrado (${paidCents}) distinto al de ${what} ${item.id} (${item.price}); no se activa`);
+      await alertFailedPayment(params, `el importe cobrado por el banco (${paidCents / 100}€) no coincide con el de la solicitud (${item.price}€); revísalo en Redsys`);
       await redis.del(lockKey);
       return false;
     };
@@ -70,5 +90,8 @@ export async function confirmPaymentFromParams(params) {
     }
   }
 
+  if (!success && params.Ds_MerchantData) {
+    await alertFailedPayment(params, `el banco no ha autorizado el pago (código ${params.Ds_Response ?? 'desconocido'})`);
+  }
   return success;
 }

@@ -74,6 +74,22 @@ async function sendEmail(to, subject, htmlContent) {
   }
 }
 
+// Aviso a Beatriz cuando un pago con tarjeta falla (banco rechaza o importe
+// que no cuadra), para que lo resuelva en el momento. Destino: ADMIN_ALERT_EMAIL
+// o, si no está definida, el remitente del estudio (BREVO_SENDER_EMAIL).
+export async function notifyPagoFallido(student, { concept, amount, reason }) {
+  const to = process.env.ADMIN_ALERT_EMAIL || process.env.BREVO_SENDER_EMAIL;
+  const who = student ? `${student.name || 'Alumna'} (${student.phone || 'sin teléfono'})` : 'Alumna desconocida';
+  await sendEmail(
+    to,
+    `Pago fallido: ${student ? student.name : 'alumna'}`,
+    `<p><b>Orden fallida</b> de ${who}.</p>
+     <p>${concept || 'Pago con tarjeta'}${amount ? ` · ${amount}€` : ''}</p>
+     <p>Motivo: ${reason}.</p>
+     <p>No se ha activado nada. Ponte en contacto con ella o dile que reintente el pago desde la app.</p>`
+  );
+}
+
 export async function notifyBonoConfirmado(student, purchase) {
   if (!student) return;
   const purchases = (await redis.get('purchases')) || [];
