@@ -60,7 +60,7 @@ export async function syncStudentContact(student, purchases) {
 }
 
 async function sendEmail(to, subject, htmlContent) {
-  if (!enabled() || !to || !process.env.BREVO_SENDER_EMAIL) return;
+  if (!enabled() || !to || !process.env.BREVO_SENDER_EMAIL) return false;
   try {
     const res = await brevoPost('/smtp/email', {
       sender: { name: process.env.BREVO_SENDER_NAME || 'Aditi Functional Yoga', email: process.env.BREVO_SENDER_EMAIL },
@@ -68,10 +68,24 @@ async function sendEmail(to, subject, htmlContent) {
       subject,
       htmlContent
     });
-    if (!res.ok) console.error('Brevo: error enviando email', await res.text());
+    if (!res.ok) { console.error('Brevo: error enviando email', await res.text()); return false; }
+    return true;
   } catch (e) {
     console.error('Brevo: excepción enviando email', e);
+    return false;
   }
+}
+
+const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// Email de Beatriz a las alumnas que ella elige. Un email individual por
+// alumna (nunca se ven las direcciones de las demás). Devuelve cuántos salieron.
+export async function sendCommunication(students, subject, message) {
+  const body = esc(message).replace(/\r?\n/g, '<br>');
+  const results = await Promise.all((students || []).filter(s => s.email).map(s =>
+    sendEmail(s.email, subject, `<p>Hola ${esc((s.name || '').split(' ')[0])},</p><p>${body}</p><p>— Aditi Functional Yoga</p>`)
+  ));
+  return { sent: results.filter(Boolean).length, failed: results.filter(r => !r).length };
 }
 
 // Aviso a Beatriz cuando un pago con tarjeta falla (banco rechaza o importe

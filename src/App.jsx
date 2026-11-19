@@ -1637,6 +1637,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
     { id: 'revision', label: `Revisión de bonos${reviewCount ? ` (${reviewCount})` : ''}` },
     { id: 'gestionbonos', label: 'Gestionar bonos' },
     { id: 'muro', label: 'Publicar en el muro' },
+    { id: 'email', label: 'Enviar email' },
     { id: 'encuestas', label: 'Encuestas' },
     { id: 'eventos', label: 'Eventos especiales' },
     { id: 'recursos', label: 'Consejos e información' },
@@ -1815,6 +1816,7 @@ function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, pur
       {adminTab === 'revision' && <AdminRevisionBonos purchases={purchases} savePurchases={savePurchases} bookings={bookings} students={students} bonos={bonos} toast={toast} />}
       {adminTab === 'gestionbonos' && <AdminBonos bonos={bonos} saveBonos={saveBonos} toast={toast} />}
       {adminTab === 'muro' && <AdminMuro wallPosts={wallPosts} saveWallPosts={saveWallPosts} scheduledPosts={scheduledPosts} saveScheduledPosts={saveScheduledPosts} students={students} purchases={purchases} adminToken={adminToken} toast={toast} />}
+      {adminTab === 'email' && <AdminEmail students={students} purchases={purchases} adminToken={adminToken} toast={toast} />}
       {adminTab === 'encuestas' && <AdminEncuestas polls={polls} savePolls={savePolls} students={students} adminToken={adminToken} toast={toast} />}
       {adminTab === 'recursos' && <AdminRecursos resources={resources} saveResources={saveResources} toast={toast} />}
       {adminTab === 'eventos' && <AdminEventos events={events} saveEvents={saveEvents} bookings={bookings} saveBookings={saveBookings} students={students} adminToken={adminToken} toast={toast} />}
@@ -2595,6 +2597,69 @@ function AdminResumenClass({ cls: c, dateIso, students, bookings, saveBookings, 
         )}
       </div>
     </div>
+  );
+}
+
+function AdminEmail({ students, purchases, adminToken, toast }) {
+  const [subject, setSubject] = useState('');
+  const [message, setMessage] = useState('');
+  const [search, setSearch] = useState('');
+  const [selected, setSelected] = useState(() => new Set());
+  const [sending, setSending] = useState(false);
+  const sorted = [...students].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'es'));
+  const q = search.trim().toLowerCase();
+  const shown = sorted.filter(s => !q || (s.name || '').toLowerCase().includes(q) || (s.phone || '').includes(q));
+  const chosen = sorted.filter(s => s.email && selected.has(s.id));
+  const toggle = (id) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const pick = (list) => setSelected(new Set(list.filter(s => s.email).map(s => s.id)));
+
+  async function send() {
+    if (sending || chosen.length === 0 || !subject.trim() || !message.trim()) return;
+    if (!confirm(`¿Enviar este email a ${chosen.length} ${chosen.length === 1 ? 'persona' : 'personas'}? Cada una recibirá el suyo, sin ver a las demás.`)) return;
+    setSending(true);
+    try {
+      const r = await fetch('/api/send-email', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-admin-token': adminToken }, body: JSON.stringify({ studentIds: chosen.map(s => s.id), subject, message }) });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || 'No se pudo enviar');
+      toast(data.failed ? `Enviado a ${data.sent}; a ${data.failed} no ha llegado a salir. Revisa Brevo` : `Email enviado a ${data.sent}`);
+      if (!data.failed) { setSubject(''); setMessage(''); setSelected(new Set()); }
+    } catch (e) {
+      toast(e.message || 'No se pudo enviar');
+    }
+    setSending(false);
+  }
+
+  return (
+    <>
+      <div className="sectionlabel">Enviar un email a quien elijas</div>
+      <div className="card">
+        <label>Asunto</label>
+        <input value={subject} onChange={e => setSubject(e.target.value)} maxLength={150} />
+        <label>Mensaje (el email ya empieza con «Hola, nombre» y acaba firmado por Áditi)</label>
+        <textarea rows={6} value={message} onChange={e => setMessage(e.target.value)} />
+      </div>
+      <div className="sectionlabel">Destinatarias ({chosen.length} elegidas)</div>
+      <div className="card">
+        <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
+          <button className="btn btn-outline btn-sm" onClick={() => pick(sorted)}>Todas</button>
+          <button className="btn btn-outline btn-sm" onClick={() => pick(sorted.filter(s => hasActiveBonoAt(purchases, s.id, new Date())))}>Con bono activo</button>
+          <button className="btn btn-outline btn-sm" onClick={() => pick(shown)}>Las de la búsqueda</button>
+          <button className="btn btn-outline btn-sm" onClick={() => setSelected(new Set())}>Ninguna</button>
+        </div>
+        <input style={{ marginTop: 8 }} placeholder="Buscar por nombre o teléfono" value={search} onChange={e => setSearch(e.target.value)} />
+        <div style={{ maxHeight: 340, overflowY: 'auto', marginTop: 8 }}>
+          {shown.map(s => (
+            <label key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', opacity: s.email ? 1 : 0.5 }}>
+              <input type="checkbox" style={{ width: 'auto' }} disabled={!s.email} checked={!!s.email && selected.has(s.id)} onChange={() => toggle(s.id)} />
+              <span>{s.name}{!s.email && ' · sin email'}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+      <button className="btn btn-primary" style={{ marginTop: 8 }} disabled={sending || chosen.length === 0 || !subject.trim() || !message.trim()} onClick={send}>
+        {sending ? 'Enviando…' : `Enviar a ${chosen.length}`}
+      </button>
+    </>
   );
 }
 
