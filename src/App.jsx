@@ -187,7 +187,9 @@ function reconcileBonos(purchases, bookings) {
   return rows.map(r => {
     const used = r.p.classesUsed || 0;
     const kind = used < r.act ? 'menos' : used > r.act + r.can ? 'mas' : 'ok';
-    return { ...r, used, kind, fix: kind === 'menos' ? r.act : r.act + r.can };
+    const sig = `${used}|${r.act}|${r.can}`;
+    // "Revisado por Bea" solo vale mientras los números no cambien: si se mueve algo, vuelve a salir.
+    return { ...r, used, kind, sig, reviewed: !!r.p.reviewed && r.p.reviewed.sig === sig, fix: kind === 'menos' ? r.act : r.act + r.can };
   });
 }
 
@@ -1626,7 +1628,7 @@ function AdminEstadisticas({ students, purchases, bookings, bonos }) {
 function AdminTab({ adminTab, setAdminTab, students, saveStudents, bookings, purchases, wallPosts, polls, savePolls, holidays, saveHolidays, events, saveEvents, scheduledPosts, saveScheduledPosts, classCancellations, saveClassCancellations, punctualClasses, savePunctualClasses, resources, saveResources, activePurchaseFor, adminToken, schedule, saveSchedule, bonos, saveBonos, settings, saveSettings, onAdminLogout, savePurchases, saveBookings, saveWallPosts, toast }) {
   const [alumnaSearch, setAlumnaSearch] = useState('');
   const { freezes, saveFreezes } = useContext(FreezeContext);
-  const reviewCount = reconcileBonos(purchases, bookings).filter(r => r.kind !== 'ok' && new Date(r.p.expiryDate) >= addDays(new Date(), -30)).length;
+  const reviewCount = reconcileBonos(purchases, bookings).filter(r => r.kind !== 'ok' && !r.reviewed && new Date(r.p.expiryDate) >= addDays(new Date(), -30)).length;
   const tabs = [
     { id: 'estadisticas', label: 'Estadísticas' },
     { id: 'resumen', label: 'Resumen del día' },
@@ -2087,8 +2089,12 @@ function BonoForm({ form, setForm, onSave, onCancel }) {
 function AdminRevisionBonos({ purchases, savePurchases, bookings, students, bonos, toast }) {
   const nameOf = (id) => (students.find(s => s.id === id) || {}).name || 'Alumna eliminada';
   const recent = (p) => new Date(p.expiryDate) >= addDays(new Date(), -30);
-  const issues = reconcileBonos(purchases, bookings).filter(r => r.kind !== 'ok' && recent(r.p))
+  const allIssues = reconcileBonos(purchases, bookings).filter(r => r.kind !== 'ok' && recent(r.p))
     .sort((a, b) => new Date(b.p.expiryDate) - new Date(a.p.expiryDate));
+  const issues = allIssues.filter(r => !r.reviewed);
+  const reviewedIssues = allIssues.filter(r => r.reviewed);
+  const mark = (id, patch, msg) => { savePurchases(purchases.map(x => x.id === id ? { ...x, ...patch } : x)); toast(msg); };
+  const markReviewed = (r) => mark(r.p.id, { reviewed: { by: 'Bea', at: new Date().toISOString(), sig: r.sig } }, 'Marcado como revisado');
 
   function adjust(r) {
     const msg = `${nameOf(r.p.studentId)} · ${bonoName(bonos, r.p.bonoId)}: ahora figuran ${r.used} clases usadas y se ajustarán a ${r.fix}.\n\n${r.kind === 'menos'
@@ -2100,7 +2106,7 @@ function AdminRevisionBonos({ purchases, savePurchases, bookings, students, bono
   }
 
   // Tarjeta: el banco activa al instante; si tardó horas es probable que se marcara a mano.
-  const toCheck = purchases.filter(p => p.status === 'confirmado' && recent(p) && !p.payment?.order && (p.paymentMethod === 'redsys' || !p.paymentMethod))
+  const toCheck = purchases.filter(p => p.status === 'confirmado' && recent(p) && !p.payment?.order && !p.paymentReviewed && (p.paymentMethod === 'redsys' || !p.paymentMethod))
     .sort((a, b) => new Date(b.purchaseDate) - new Date(a.purchaseDate));
   const hoursToActivate = (p) => {
     const activated = new Date(new Date(p.expiryDate).getTime() - (p.trimestre ? 90 : 30) * 86400000);
@@ -2116,9 +2122,24 @@ function AdminRevisionBonos({ purchases, savePurchases, bookings, students, bono
           <h3>{nameOf(r.p.studentId)} <span className={`pill ${r.kind === 'menos' ? 'pill-peach' : 'pill-lav'}`}>{r.kind === 'menos' ? 'Se le cobra de menos' : 'Se le ha descontado de más'}</span></h3>
           <p className="muted">{bonoName(bonos, r.p.bonoId)}{r.p.trimestre && ' · Trimestre'} · caduca el {fmtDate(new Date(r.p.expiryDate))}</p>
           <p className="muted">Clases usadas: <b>{r.used}</b> de {r.p.classesTotal} · reservas activas: <b>{r.act}</b> · canceladas: {r.can}</p>
-          <button className="btn btn-sage btn-sm" style={{ marginTop: 8 }} onClick={() => adjust(r)}>Ajustar a {r.fix}</button>
+          <div className="row" style={{ marginTop: 8 }}>
+            <button className="btn btn-sage btn-sm" onClick={() => adjust(r)}>Ajustar a {r.fix}</button>
+            <button className="btn btn-outline btn-sm" onClick={() => markReviewed(r)}>Revisado por Bea</button>
+          </div>
         </div>
       ))}
+      {reviewedIssues.length > 0 && (
+        <details style={{ marginTop: 8 }}>
+          <summary className="muted">Revisados por Bea ({reviewedIssues.length})</summary>
+          {reviewedIssues.map(r => (
+            <div className="card" key={r.p.id}>
+              <h3>{nameOf(r.p.studentId)} <span className="pill pill-sage">revisado</span></h3>
+              <p className="muted">{bonoName(bonos, r.p.bonoId)}{r.p.trimestre && ' · Trimestre'} · usadas {r.used} de {r.p.classesTotal} · reservas activas {r.act}</p>
+              <button className="btn btn-outline btn-sm" onClick={() => mark(r.p.id, { reviewed: null }, 'Vuelve a pendiente')}>Volver a pendiente</button>
+            </div>
+          ))}
+        </details>
+      )}
 
       <div className="sectionlabel">Pagos con tarjeta sin justificante del banco</div>
       <p className="muted" style={{ marginBottom: 8 }}>Bonos activos pagados con tarjeta (o sin método de pago) que no tienen justificante guardado. Cuando el banco cobra, el bono se activa solo al instante; si tardó horas, lo más probable es que se marcara a mano. Compáralos con el panel de Redsys.</p>
@@ -2128,6 +2149,7 @@ function AdminRevisionBonos({ purchases, savePurchases, bookings, students, bono
           <div className="card" key={p.id}>
             <h3>{nameOf(p.studentId)} <span className="pill pill-gray">{p.paymentMethod ? 'Tarjeta' : 'Sin método de pago'}</span></h3>
             <p className="muted">{bonoName(bonos, p.bonoId)}{p.trimestre && ' · Trimestre'} · {p.price}€ · solicitado el {fmtDate(new Date(p.purchaseDate))}</p>
+            <button className="btn btn-outline btn-sm" style={{ float: 'right' }} onClick={() => mark(p.id, { paymentReviewed: { by: 'Bea', at: new Date().toISOString() } }, 'Marcado como revisado')}>Revisado por Bea</button>
             {p.paymentMethod && <p className="muted">{h > 0.2 ? `Se activó unas ${h < 48 ? `${Math.round(h)} horas` : `${Math.round(h / 24)} días`} después de pedirlo${h > 1 ? ': probablemente a mano' : ''}.` : 'Se activó al momento.'}</p>}
           </div>
         );
