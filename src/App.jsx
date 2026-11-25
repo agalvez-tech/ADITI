@@ -1311,9 +1311,10 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
       {assigningBono && (
         <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
           <label>Bono ya pagado (fuera de la app)</label>
-          <select value={bonoId} onChange={e => setBonoId(e.target.value)}>
+          <select value={bonoId ? (trimestre ? `${bonoId}|tri` : bonoId) : ''} onChange={e => { const [id, tri] = e.target.value.split('|'); setBonoId(id); setTrimestre(tri === 'tri'); }}>
             <option value="">Selecciona un bono</option>
-            {bonos.map(b => <option key={b.id} value={b.id}>{b.name} · {b.price}€</option>)}
+            {bonos.map(b => <option key={b.id} value={b.id}>{b.name} · mensual · {b.price}€</option>)}
+            {bonos.map(b => <option key={`${b.id}|tri`} value={`${b.id}|tri`}>{b.name} · TRIMESTRAL · {bonoTrimestre(b)?.price ?? b.price * 3}€</option>)}
           </select>
           {bonoId && (() => {
             const b = bonos.find(x => x.id === bonoId);
