@@ -1581,6 +1581,46 @@ function AdminEstadisticas({ students, purchases, bookings, bonos }) {
   });
   const topBonos = Object.entries(bonoCount).sort((a, b) => b[1] - a[1]);
 
+  // Mejor mes: facturación por mes (bonos por fecha de compra, sueltas por fecha de reserva) y clases dadas ese mes.
+  const monthKey = (iso) => String(iso).slice(0, 7);
+  const monthly = {};
+  const bumpMonth = (k, field, n) => { if (!k || k.length !== 7) return; (monthly[k] = monthly[k] || { revenue: 0, attended: 0 })[field] += n; };
+  purchases.filter(p => p.status === 'confirmado').forEach(p => bumpMonth(monthKey(p.purchaseDate), 'revenue', p.price || 0));
+  bookings.filter(b => b.status === 'confirmada' && b.paymentMethod !== 'bono').forEach(b => bumpMonth(monthKey(b.createdAt), 'revenue', b.price || 0));
+  const todayIso = isoDate(now);
+  const attended = bookings.filter(b => b.status === 'confirmada' && b.date && b.date <= todayIso);
+  attended.forEach(b => bumpMonth(monthKey(b.date), 'attended', 1));
+  const months = Object.entries(monthly).sort((a, b) => b[0].localeCompare(a[0])).slice(0, 12);
+  const maxRevenue = Math.max(1, ...months.map(([, m]) => m.revenue));
+  const bestMonth = months.reduce((best, cur) => (!best || cur[1].revenue > best[1].revenue ? cur : best), null);
+  const monthName = (k) => capitalizeFirst(new Date(`${k}-01T12:00:00`).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }));
+
+  // Mejor día de la semana y mejor día concreto (por asistencia a clases ya dadas).
+  const sessionKey = (b) => `${b.date}|${b.time}|${b.className}`;
+  const byWeekday = {};
+  const byDate = {};
+  const sessionsByWeekday = {};
+  attended.forEach(b => {
+    const wd = dayNameForDate(new Date(`${b.date}T12:00:00`));
+    byWeekday[wd] = (byWeekday[wd] || 0) + 1;
+    (sessionsByWeekday[wd] = sessionsByWeekday[wd] || new Set()).add(sessionKey(b));
+    byDate[b.date] = (byDate[b.date] || 0) + 1;
+  });
+  const weekdays = Object.keys(byWeekday).sort((a, b) => byWeekday[b] - byWeekday[a]);
+  const maxWeekday = Math.max(1, ...Object.values(byWeekday));
+  const bestDate = Object.entries(byDate).sort((a, b) => b[1] - a[1])[0];
+
+  // Clases que funcionan: media de asistentes por sesión de cada clase del horario (día, hora y nombre).
+  const slots = {};
+  attended.forEach(b => {
+    const k = `${b.className}|${dayNameForDate(new Date(`${b.date}T12:00:00`))}|${b.time}`;
+    const slot = slots[k] = slots[k] || { name: b.className, day: dayNameForDate(new Date(`${b.date}T12:00:00`)), time: b.time, total: 0, sessions: new Set() };
+    slot.total++;
+    slot.sessions.add(b.date);
+  });
+  const slotRows = Object.values(slots).map(x => ({ ...x, n: x.sessions.size, avg: x.total / x.sessions.size })).sort((a, b) => b.avg - a.avg);
+  const maxAvg = Math.max(1, ...slotRows.map(r => r.avg));
+
   return (
     <>
       <div className="daychips">
@@ -1618,6 +1658,47 @@ function AdminEstadisticas({ students, purchases, bookings, bonos }) {
             <span className="pill pill-lav">{count} reserva{count === 1 ? '' : 's'}</span>
           </div>
         ))}
+
+      <div className="sectionlabel">Mejor mes (facturación)</div>
+      {months.length === 0 ? <div className="empty">Todavía no hay datos.</div> : (
+        <div className="card">
+          {bestMonth && <p style={{ marginBottom: 8 }}>Tu mejor mes es <b>{monthName(bestMonth[0])}</b> con <b>{bestMonth[1].revenue}€</b>.</p>}
+          {months.map(([k, m]) => (
+            <div key={k} style={{ marginTop: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>{monthName(k)}</span><span><b>{m.revenue}€</b> · {m.attended} clases</span></div>
+              <div style={{ height: 6, borderRadius: 3, background: bestMonth && bestMonth[0] === k ? 'var(--plum)' : 'var(--lav)', width: `${Math.max(2, (m.revenue / maxRevenue) * 100)}%`, marginTop: 3 }} />
+            </div>
+          ))}
+          <p className="muted" style={{ marginTop: 10 }}>Los bonos cuentan en el mes en que se compran y las clases sueltas en el mes en que se reservan. "Clases" son las asistencias a clases ya dadas ese mes.</p>
+        </div>
+      )}
+
+      <div className="sectionlabel">Mejor día</div>
+      {weekdays.length === 0 ? <div className="empty">Todavía no hay clases dadas.</div> : (
+        <div className="card">
+          <p style={{ marginBottom: 8 }}>El día de la semana con más asistencia es <b>{weekdays[0]}</b>.{bestDate && <> Tu mejor día concreto fue el <b>{fmtIso(bestDate[0])}</b> con {bestDate[1]} asistencias.</>}</p>
+          {weekdays.map(wd => (
+            <div key={wd} style={{ marginTop: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>{wd}</span><span><b>{byWeekday[wd]}</b> {byWeekday[wd] === 1 ? 'asistencia' : 'asistencias'} · {(byWeekday[wd] / sessionsByWeekday[wd].size).toFixed(1)} por clase</span></div>
+              <div style={{ height: 6, borderRadius: 3, background: wd === weekdays[0] ? 'var(--plum)' : 'var(--lav)', width: `${Math.max(2, (byWeekday[wd] / maxWeekday) * 100)}%`, marginTop: 3 }} />
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="sectionlabel">Clases que mejor funcionan</div>
+      {slotRows.length === 0 ? <div className="empty">Todavía no hay clases dadas.</div> : (
+        <div className="card">
+          {slotRows.map(r => (
+            <div key={`${r.name}|${r.day}|${r.time}`} style={{ marginTop: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}><span>{r.name} · {r.day} {r.time}</span><span style={{ whiteSpace: 'nowrap' }}><b>{r.avg.toFixed(1)}</b> por clase</span></div>
+              <div style={{ height: 6, borderRadius: 3, background: r === slotRows[0] ? 'var(--plum)' : 'var(--lav)', width: `${Math.max(2, (r.avg / maxAvg) * 100)}%`, marginTop: 3 }} />
+              <p className="muted" style={{ fontSize: 12, marginTop: 2 }}>{r.total} {r.total === 1 ? 'asistencia' : 'asistencias'} en {r.n} {r.n === 1 ? 'clase' : 'clases'}</p>
+            </div>
+          ))}
+          <p className="muted" style={{ marginTop: 10 }}>La media se calcula sobre las clases en las que hubo alguna alumna apuntada; las clases que se dieron sin nadie no aparecen.</p>
+        </div>
+      )}
 
       <div className="sectionlabel">Bonos activos por tipo</div>
       {topBonos.length === 0 ? <div className="empty">No hay bonos activos ahora mismo.</div> :
