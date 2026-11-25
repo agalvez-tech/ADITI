@@ -3,6 +3,7 @@ import { syncStudentContact, notifyBonoConfirmado, notifySueltaConfirmada, broad
 import { notifyStudentPush, notifyAllPush } from './_push.js';
 import { audienceStudents } from './_audience.js';
 import { bonoCatalog, expectedPurchase, freezeOptionsOf } from './_bonos.js';
+import { extendBonosForClosures } from './_closures.js';
 
 const redis = Redis.fromEnv();
 
@@ -515,6 +516,11 @@ export default async function handler(req, res) {
       }
 
       await redis.set(key, value);
+
+      // Días cerrados laborables: alargan los bonos que los cubren (también al crear un bono a mano o congelar).
+      if (admin && (key === 'holidays' || key === 'purchases' || key === 'freezes')) {
+        try { await extendBonosForClosures(); } catch (e) { console.error('Cierres: error alargando bonos', e); }
+      }
 
       if (!admin && key === 'bookings') {
         try { await applyStudentBonoAccounting(diff); } catch (e) { console.error('Control de clases del bono: error', e); }

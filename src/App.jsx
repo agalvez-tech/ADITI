@@ -1878,6 +1878,7 @@ function AdminFestivos({ holidays, saveHolidays, scheduledPosts, saveScheduledPo
   const [label, setLabel] = useState('');
   const [when, setWhen] = useState('ahora'); // cuándo se avisa a las alumnas: 'ahora' | 'programar'
   const [noticeAt, setNoticeAt] = useState('');
+  const [extendBonos, setExtendBonos] = useState(false); // día laborable cerrado: alarga los bonos
 
   function add() {
     if (!date) { toast('Elige una fecha'); return; }
@@ -1890,7 +1891,7 @@ function AdminFestivos({ holidays, saveHolidays, scheduledPosts, saveScheduledPo
     // Un festivo por día: un periodo se guarda como varios, saltando los ya marcados.
     const nuevos = [];
     for (let d = new Date(`${date}T12:00:00`); isoDate(d) <= last; d = addDays(d, 1)) {
-      if (!holidays.some(h => h.date === isoDate(d))) nuevos.push({ id: uid(), date: isoDate(d), label: label.trim(), ...(programar ? { noAviso: true } : {}) });
+      if (!holidays.some(h => h.date === isoDate(d))) nuevos.push({ id: uid(), date: isoDate(d), label: label.trim(), ...(programar ? { noAviso: true } : {}), ...(extendBonos ? { extendBonos: true } : {}) });
     }
     if (nuevos.length === 0) { toast(last === date ? 'Ese día ya está marcado como festivo' : 'Esos días ya están marcados como festivos'); return; }
     saveHolidays([...holidays, ...nuevos]);
@@ -1900,6 +1901,7 @@ function AdminFestivos({ holidays, saveHolidays, scheduledPosts, saveScheduledPo
     setLabel('');
     setWhen('ahora');
     setNoticeAt('');
+    setExtendBonos(false);
     const cuando = nuevos.length === 1 ? fmtIso(nuevos[0].date) : `del ${fmtIso(nuevos[0].date)} al ${fmtIso(nuevos[nuevos.length - 1].date)}`;
     if (programar) {
       // El aviso se publica solo en la fecha elegida (Muro + email + push), como una publicación programada.
@@ -1928,8 +1930,11 @@ function AdminFestivos({ holidays, saveHolidays, scheduledPosts, saveScheduledPo
       {holidays.length === 0 && <p className="muted">No hay ningún día festivo marcado.</p>}
       {[...holidays].sort((a, b) => a.date.localeCompare(b.date)).map(h => (
         <div key={h.id} className="row" style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
-          <span>{fmtDate(new Date(`${h.date}T12:00:00`))}{h.label ? ` · ${h.label}` : ''}</span>
-          <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => remove(h)}>Quitar</button>
+          <span>{fmtDate(new Date(`${h.date}T12:00:00`))}{h.label ? ` · ${h.label}` : ''}{h.extendBonos && <span className="pill pill-sage" style={{ marginLeft: 6 }}>alarga bonos</span>}</span>
+          <span>
+            <button className="linklike" onClick={() => saveHolidays(holidays.map(x => x.id === h.id ? { ...x, extendBonos: !x.extendBonos } : x))}>{h.extendBonos ? 'No alargar' : 'Alargar bonos'}</button>{' '}
+            <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => remove(h)}>Quitar</button>
+          </span>
         </div>
       ))}
       {adding ? (
@@ -1946,6 +1951,10 @@ function AdminFestivos({ holidays, saveHolidays, scheduledPosts, saveScheduledPo
           </div>
           <p className="muted" style={{ marginTop: 4 }}>Para un solo día, deja "Hasta" vacío. Para varios seguidos (ej. del 25 al 27), pon el último día.</p>
           <input type="text" value={label} onChange={e => setLabel(e.target.value)} placeholder="Motivo (opcional, ej. Navidad)" />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input type="checkbox" style={{ width: 'auto' }} checked={extendBonos} onChange={e => setExtendBonos(e.target.checked)} />
+            Son días laborables: alargar los bonos de las alumnas (un día más por cada día cerrado)
+          </label>
           <label>¿Cuándo se avisa a las alumnas?</label>
           <div className="row" style={{ marginBottom: 6 }}>
             <div className={`chip ${when === 'ahora' ? 'active' : ''}`} onClick={() => setWhen('ahora')}>Ahora mismo</div>

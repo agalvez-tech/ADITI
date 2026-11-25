@@ -1,5 +1,6 @@
 import { Redis } from '@upstash/redis';
 import { notifyStudentPush } from './_push.js';
+import { extendBonosForClosures } from './_closures.js';
 
 const redis = Redis.fromEnv();
 
@@ -46,6 +47,8 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'No autorizado' });
   }
   try {
+    // Bonos nuevos que cubren días cerrados (p. ej. pagados por tarjeta) se ajustan aquí cada día.
+    await extendBonosForClosures().catch(e => console.error('Cierres: error alargando bonos', e));
     return res.status(200).json(await sendTodayReminders());
   } catch (e) {
     console.error('Recordatorios de clase: error', e);
