@@ -257,7 +257,8 @@ function isFreezeChangeAllowed(diff, current, purchases, settings) {
   if (f.startDate < madridNowString().slice(0, 10)) return false;
 
   const purchase = (purchases || []).find(p => p.id === f.purchaseId && p.studentId === f.studentId && p.status === 'confirmado');
-  if (!purchase || new Date(purchase.expiryDate) < new Date(`${f.startDate}T00:00:00`)) return false;
+  // Basta con que el bono siga vigente hoy: se puede congelar aunque le queden pocos días (la caducidad se alarga igual).
+  if (!purchase || new Date(purchase.expiryDate) < new Date()) return false;
 
   const cur = Array.isArray(current) ? current : [];
   return !cur.some(o => o.purchaseId === f.purchaseId && o.status !== 'cancelado' && (o.status === 'pendiente' || (f.startDate <= o.endDate && f.endDate >= o.startDate)));

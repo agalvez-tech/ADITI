@@ -3767,7 +3767,6 @@ function FreezeModal({ modal, me, bookings, toast, onClose }) {
   const endDate = startDate ? isoDate(addDays(new Date(`${startDate}T12:00:00`), days - 1)) : '';
   let error = null;
   if (!startDate || startDate < todayIso) error = 'Elige una fecha de inicio desde hoy en adelante.';
-  else if (new Date(purchase.expiryDate) < new Date(`${startDate}T00:00:00`)) error = 'Tu bono caduca antes de esa fecha.';
   else if (freezesOf(freezes, purchase.id).some(f => startDate <= f.endDate && endDate >= f.startDate)) error = 'Esas fechas se solapan con otra congelación de este bono.';
   else {
     const clash = bookingsInFreeze(bookings, { studentId: me.id, purchaseId: purchase.id, startDate, endDate });
