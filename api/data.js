@@ -2,7 +2,7 @@ import { Redis } from '@upstash/redis';
 import { syncStudentContact, notifyBonoConfirmado, notifySueltaConfirmada, broadcastWallPost, broadcastPoll, broadcastHoliday, notifyWaitlistSpotOpen, broadcastEvent } from './_brevo.js';
 import { notifyStudentPush, notifyAllPush } from './_push.js';
 import { audienceStudents } from './_audience.js';
-import { bonoCatalog, expectedPurchase } from './_bonos.js';
+import { bonoCatalog, expectedPurchase, freezeOptionsOf } from './_bonos.js';
 
 const redis = Redis.fromEnv();
 
@@ -249,11 +249,11 @@ function isFreezeChangeAllowed(diff, current, purchases, settings) {
   if (f.status !== 'pendiente' || f.by !== 'alumna' || !['redsys', 'bizum'].includes(f.paymentMethod)) return false;
   if (!DATE_RE.test(f.startDate || '') || !DATE_RE.test(f.endDate || '')) return false;
 
-  const maxDays = Number(settings?.freezeMaxDays) || 30;
-  const price = settings?.freezePrice === undefined ? 3 : Number(settings.freezePrice);
+  // Solo las duraciones que ofrece la app, cada una con su precio.
   const days = daysInclusive(f.startDate, f.endDate);
-  if (!Number.isInteger(days) || days < 1 || days > maxDays || f.days !== days) return false;
-  if (Number(f.price) !== price) return false;
+  const option = freezeOptionsOf(settings).find(o => Number(o.days) === days);
+  if (!Number.isInteger(days) || !option || f.days !== days) return false;
+  if (Number(f.price) !== Number(option.price)) return false;
   if (f.startDate < madridNowString().slice(0, 10)) return false;
 
   const purchase = (purchases || []).find(p => p.id === f.purchaseId && p.studentId === f.studentId && p.status === 'confirmado');

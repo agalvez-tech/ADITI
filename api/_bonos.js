@@ -10,6 +10,14 @@ export const DEFAULT_BONOS = [
   { id: 'ilimitado', price: 150, classes: null, trimestrePrice: 405 }
 ];
 
+// Opciones de congelación de bono (días y precio). Deben coincidir con
+// freezeOptionsOf de src/App.jsx. Si Beatriz no las ha cambiado en Ajustes se
+// usan estas; el precio de 7 días sigue siendo el antiguo freezePrice.
+export function freezeOptionsOf(settings) {
+  if (Array.isArray(settings?.freezeOptions) && settings.freezeOptions.length > 0) return settings.freezeOptions;
+  return [{ days: 7, price: settings?.freezePrice === undefined ? 3 : Number(settings.freezePrice) }, { days: 15, price: 8 }, { days: 30, price: 15 }];
+}
+
 export function bonoCatalog(savedBonos) {
   return Array.isArray(savedBonos) && savedBonos.length > 0 ? savedBonos : DEFAULT_BONOS;
 }

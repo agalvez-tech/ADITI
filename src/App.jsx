@@ -66,7 +66,12 @@ const DEFAULT_BONOS = [
   { id: 'bono12', name: 'Bono 12', desc: '12 clases al mes · 3 días a la semana', price: 120, classes: 12, trimestrePrice: 325 },
   { id: 'ilimitado', name: 'Bono ilimitado', desc: 'Clases ilimitadas', price: 150, classes: null, trimestrePrice: 405 }
 ];
-const DEFAULT_SETTINGS = { claseSueltaPrice: 20, bizumPhone: '691750534', whatsappPhone: '34652689928', defaultCapacity: 8, freezePrice: 3, freezeMaxDays: 30 };
+const DEFAULT_SETTINGS = { claseSueltaPrice: 20, bizumPhone: '691750534', whatsappPhone: '34652689928', defaultCapacity: 8, freezePrice: 3 };
+// Opciones de congelar un bono; mantener igual que freezeOptionsOf en api/_bonos.js.
+function freezeOptionsOf(settings) {
+  if (Array.isArray(settings.freezeOptions) && settings.freezeOptions.length > 0) return settings.freezeOptions;
+  return [{ days: 7, price: settings.freezePrice ?? 3 }, { days: 15, price: 8 }, { days: 30, price: 15 }];
+}
 const SettingsContext = React.createContext(DEFAULT_SETTINGS);
 const FreezeContext = React.createContext({ freezes: [], saveFreezes: () => {} });
 
@@ -770,7 +775,7 @@ function BonosTab({ me, activePurchaseFor, purchases, bonos, events, bookings, o
                 </>
               ) : (
                 <button className="linklike" style={{ marginTop: 8 }} onClick={() => onRequestFreeze(active)}>
-                  Congelar mi bono · {settings.freezePrice}€
+                  Congelar mi bono · desde {freezeOptionsOf(settings)[0].price}€
                 </button>
               )}
             </div>
@@ -3751,11 +3756,11 @@ function FreezeModal({ modal, me, bookings, toast, onClose }) {
   const settings = useContext(SettingsContext);
   const { freezes, saveFreezes } = useContext(FreezeContext);
   const purchase = modal.purchase;
-  const maxDays = settings.freezeMaxDays || 30;
   const todayIso = isoDate(new Date());
-  const options = Array.from(new Set([...[7, 14, 21, 30].filter(d => d <= maxDays), maxDays])).sort((a, b) => a - b);
+  const options = [...freezeOptionsOf(settings)].sort((a, b) => a.days - b.days);
   const [startDate, setStartDate] = useState(todayIso);
-  const [days, setDays] = useState(options[0]);
+  const [days, setDays] = useState(options[0].days);
+  const price = options.find(o => o.days === days).price;
   const [paying, setPaying] = useState(false);
   const submittingRef = useRef(false);
 
@@ -3772,7 +3777,7 @@ function FreezeModal({ modal, me, bookings, toast, onClose }) {
   async function createFreeze(paymentMethod) {
     const freeze = {
       id: uid(), purchaseId: purchase.id, studentId: me.id, startDate, endDate, days,
-      price: settings.freezePrice, paymentMethod, status: 'pendiente', by: 'alumna', createdAt: new Date().toISOString()
+      price, paymentMethod, status: 'pendiente', by: 'alumna', createdAt: new Date().toISOString()
     };
     return (await saveFreezes([...freezes, freeze])) ? freeze : null;
   }
@@ -3788,7 +3793,7 @@ function FreezeModal({ modal, me, bookings, toast, onClose }) {
       return;
     }
     try {
-      await payWithRedsys({ kind: 'freeze', itemId: freeze.id, studentId: me.id, amount: settings.freezePrice, concept: `Congelar bono (${days} días)` });
+      await payWithRedsys({ kind: 'freeze', itemId: freeze.id, studentId: me.id, amount: price, concept: `Congelar bono (${days} días)` });
     } catch (e) {
       submittingRef.current = false;
       setPaying(false);
@@ -3812,18 +3817,18 @@ function FreezeModal({ modal, me, bookings, toast, onClose }) {
       <div className="modal-sheet">
         <button className="modal-close" onClick={onClose}>×</button>
         <h3>Congelar mi bono</h3>
-        <p className="muted">Si no vas a poder venir (lesión, viaje…), congela tu bono: durante esos días no podrás usarlo y su caducidad se alarga el mismo número de días. Coste: <b>{settings.freezePrice}€</b>.</p>
+        <p className="muted">Si no vas a poder venir (lesión, viaje…), congela tu bono: durante esos días no podrás usarlo y su caducidad se alarga el mismo número de días. Elige cuánto tiempo y cuánto cuesta.</p>
         <label>Desde</label>
         <input type="date" value={startDate} min={todayIso} onChange={e => setStartDate(e.target.value)} />
         <label>Durante</label>
         <select value={days} onChange={e => setDays(Number(e.target.value))}>
-          {options.map(d => <option key={d} value={d}>{d} días</option>)}
+          {options.map(o => <option key={o.days} value={o.days}>{o.days} días · {o.price}€</option>)}
         </select>
         {endDate && <p className="muted" style={{ marginTop: 8 }}>Congelado del {fmtIso(startDate)} al {fmtIso(endDate)}. Tu bono caducará el {fmtDate(addDays(new Date(purchase.expiryDate), days))}.</p>}
         {error ? <p className="muted" style={{ color: 'var(--danger)' }}>{error}</p> : (
           <>
             <button className="btn btn-primary" style={{ marginTop: 14 }} disabled={paying} onClick={handleCardPayment}>
-              {paying ? 'Redirigiendo a la pasarela…' : `Pagar con tarjeta ahora · ${settings.freezePrice}€`}
+              {paying ? 'Redirigiendo a la pasarela…' : `Pagar con tarjeta ahora · ${price}€`}
             </button>
             <p className="muted" style={{ textAlign: 'center', margin: '10px 0' }}>o</p>
             <button className="btn btn-ghost" disabled={paying} onClick={handleBizum}>Pagar por Bizum al {settings.bizumPhone}</button>
@@ -3975,8 +3980,9 @@ function AdminAjustes({ settings, saveSettings, adminToken, onAdminLogout, toast
     bizumPhone: settings.bizumPhone,
     whatsappPhone: settings.whatsappPhone,
     defaultCapacity: String(settings.defaultCapacity),
-    freezePrice: String(settings.freezePrice),
-    freezeMaxDays: String(settings.freezeMaxDays)
+    freeze7: String(freezeOptionsOf(settings).find(o => o.days === 7)?.price ?? 3),
+    freeze15: String(freezeOptionsOf(settings).find(o => o.days === 15)?.price ?? 8),
+    freeze30: String(freezeOptionsOf(settings).find(o => o.days === 30)?.price ?? 15)
   });
   const [currentPin, setCurrentPin] = useState('');
   const [newPin, setNewPin] = useState('');
@@ -3989,8 +3995,8 @@ function AdminAjustes({ settings, saveSettings, adminToken, onAdminLogout, toast
       bizumPhone: form.bizumPhone.trim(),
       whatsappPhone: form.whatsappPhone.trim(),
       defaultCapacity: Number(form.defaultCapacity) || settings.defaultCapacity,
-      freezePrice: Number(form.freezePrice) || settings.freezePrice,
-      freezeMaxDays: Math.round(Number(form.freezeMaxDays)) || settings.freezeMaxDays
+      freezePrice: Number(form.freeze7) || 3,
+      freezeOptions: [{ days: 7, price: Number(form.freeze7) || 3 }, { days: 15, price: Number(form.freeze15) || 8 }, { days: 30, price: Number(form.freeze30) || 15 }]
     });
     toast('Ajustes guardados');
   }
@@ -4022,10 +4028,12 @@ function AdminAjustes({ settings, saveSettings, adminToken, onAdminLogout, toast
         <input type="text" value={form.whatsappPhone} onChange={e => setForm({ ...form, whatsappPhone: e.target.value })} />
         <label>Aforo por defecto de una clase</label>
         <input type="number" value={form.defaultCapacity} onChange={e => setForm({ ...form, defaultCapacity: e.target.value })} />
-        <label>Precio de congelar un bono (€) — Beatriz lo congela gratis cuando quiera</label>
-        <input type="number" min="1" value={form.freezePrice} onChange={e => setForm({ ...form, freezePrice: e.target.value })} />
-        <label>Máximo de días por congelación</label>
-        <input type="number" min="1" value={form.freezeMaxDays} onChange={e => setForm({ ...form, freezeMaxDays: e.target.value })} />
+        <label>Congelar un bono 7 días (€) — Beatriz lo congela gratis cuando quiera</label>
+        <input type="number" min="1" value={form.freeze7} onChange={e => setForm({ ...form, freeze7: e.target.value })} />
+        <label>Congelar un bono 15 días (€)</label>
+        <input type="number" min="1" value={form.freeze15} onChange={e => setForm({ ...form, freeze15: e.target.value })} />
+        <label>Congelar un bono 30 días (€)</label>
+        <input type="number" min="1" value={form.freeze30} onChange={e => setForm({ ...form, freeze30: e.target.value })} />
         <button className="btn btn-sage btn-sm" style={{ marginTop: 10 }} onClick={saveGeneral}>Guardar ajustes</button>
       </div>
 
