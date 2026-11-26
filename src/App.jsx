@@ -1358,7 +1358,10 @@ function AdminAlumnaCard({ s, students, saveStudents, active, total, bonos, purc
 
 function AdminBonoEditRow({ p, bonos, purchases, savePurchases, bookings, saveBookings, toast }) {
   const { freezes, saveFreezes } = useContext(FreezeContext);
+  const settings = useContext(SettingsContext);
+  const freezeOpts = [...freezeOptionsOf(settings)].sort((a, b) => a.days - b.days);
   const [freezing, setFreezing] = useState(false);
+  const [fDays, setFDays] = useState('free'); // 'free' o nº de días de una opción con coste
   const [fStart, setFStart] = useState(() => isoDate(new Date()));
   const [fEnd, setFEnd] = useState(() => isoDate(addDays(new Date(), 6)));
   const [fReason, setFReason] = useState('');
@@ -1387,16 +1390,19 @@ function AdminBonoEditRow({ p, bonos, purchases, savePurchases, bookings, saveBo
     toast('Bono cancelado');
   }
 
-  // Congelación gratuita decidida por Beatriz (cualquier motivo, sin coste).
-  function freezeForFree() {
+  // Congelación decidida por Beatriz: gratis (cualquier motivo) o con el coste de una de las opciones.
+  function freezeByAdmin() {
     if (!fStart || !fEnd || fEnd < fStart) { toast('Revisa las fechas de la congelación'); return; }
+    const opt = fDays === 'free' ? null : freezeOpts.find(o => o.days === Number(fDays));
+    if (opt && freezeDays(fStart, fEnd) !== opt.days) { toast(`Con coste el periodo es de ${opt.days} días`); return; }
+    const price = opt ? Number(opt.price) : 0;
     if (freezesOf(freezes, p.id).some(f => fStart <= f.endDate && fEnd >= f.startDate)) { toast('Esas fechas se solapan con otra congelación de este bono'); return; }
     const f = {
       id: uid(), purchaseId: p.id, studentId: p.studentId, startDate: fStart, endDate: fEnd, days: freezeDays(fStart, fEnd),
-      price: 0, paymentMethod: 'admin', status: 'confirmado', by: 'admin', reason: fReason.trim(), createdAt: new Date().toISOString()
+      price, paymentMethod: 'admin', status: 'confirmado', by: 'admin', reason: fReason.trim(), createdAt: new Date().toISOString()
     };
     const { nextPurchases, nextBookings, cancelled } = applyFreeze(f, purchases, bookings);
-    const msg = `¿Congelar este bono del ${fmtIso(fStart)} al ${fmtIso(fEnd)} (${f.days} días, sin coste)? La caducidad se alargará ${f.days} días.`
+    const msg = `¿Congelar este bono del ${fmtIso(fStart)} al ${fmtIso(fEnd)} (${f.days} días, ${price ? `${price}€` : 'sin coste'})? La caducidad se alargará ${f.days} días.`
       + (cancelled > 0 ? `\n\nTiene ${cancelled} clase${cancelled === 1 ? '' : 's'} reservada${cancelled === 1 ? '' : 's'} con este bono en esas fechas: se cancelará${cancelled === 1 ? '' : 'n'} y se le devolverá${cancelled === 1 ? '' : 'n'} al bono.` : '');
     if (!confirm(msg)) return;
     savePurchases(nextPurchases);
@@ -1453,27 +1459,32 @@ function AdminBonoEditRow({ p, bonos, purchases, savePurchases, bookings, saveBo
           {pFreezes.map(f => (
             <p key={f.id} className="muted" style={{ marginTop: 4 }}>
               <span className={`pill ${f.status === 'confirmado' ? 'pill-lav' : 'pill-gray'}`}>{f.status === 'confirmado' ? 'Congelado' : 'Pendiente de pago'}</span>{' '}
-              {fmtIso(f.startDate)} → {fmtIso(f.endDate)} · {f.by === 'admin' ? `gratis${f.reason ? ` (${f.reason})` : ''}` : `${f.price}€`}{' '}
+              {fmtIso(f.startDate)} → {fmtIso(f.endDate)} · {f.by === 'admin' && !f.price ? `gratis${f.reason ? ` (${f.reason})` : ''}` : `${f.price}€${f.by === 'admin' && f.reason ? ` (${f.reason})` : ''}`}{' '}
               <button className="linklike" style={{ color: 'var(--danger)' }} onClick={() => removeFreeze(f)}>Quitar</button>
             </p>
           ))}
           {freezing ? (
             <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--line)' }}>
+              <label>Tipo de congelación</label>
+              <select value={fDays} onChange={e => { setFDays(e.target.value); if (e.target.value !== 'free') setFEnd(isoDate(addDays(new Date(`${fStart}T12:00:00`), Number(e.target.value) - 1))); }}>
+                <option value="free">Gratis (el periodo que quieras)</option>
+                {freezeOpts.map(o => <option key={o.days} value={o.days}>{o.days} días · {o.price}€</option>)}
+              </select>
               <label>Congelar desde</label>
-              <input type="date" value={fStart} onChange={e => setFStart(e.target.value)} />
+              <input type="date" value={fStart} onChange={e => { setFStart(e.target.value); if (fDays !== 'free' && e.target.value) setFEnd(isoDate(addDays(new Date(`${e.target.value}T12:00:00`), Number(fDays) - 1))); }} />
               <label>Hasta (incluido)</label>
-              <input type="date" value={fEnd} min={fStart} onChange={e => setFEnd(e.target.value)} />
+              <input type="date" value={fEnd} min={fStart} disabled={fDays !== 'free'} onChange={e => setFEnd(e.target.value)} />
               <label>Motivo (opcional)</label>
               <input type="text" value={fReason} onChange={e => setFReason(e.target.value)} placeholder="Ej. lesión, viaje, cierre del centro…" />
               <div className="row" style={{ marginTop: 8 }}>
-                <button className="btn btn-sage btn-sm" onClick={freezeForFree}>Congelar sin coste</button>
+                <button className="btn btn-sage btn-sm" onClick={freezeByAdmin}>{fDays === 'free' ? 'Congelar sin coste' : `Congelar · ${freezeOpts.find(o => o.days === Number(fDays))?.price}€`}</button>
                 <button className="linklike" onClick={() => setFreezing(false)}>Cancelar</button>
               </div>
             </div>
           ) : null}
           <div className="row" style={{ marginTop: 8 }}>
             <button className="linklike" onClick={() => setEditing(true)}>Editar</button>
-            {p.status === 'confirmado' && !vencido && !freezing && <button className="linklike" onClick={() => setFreezing(true)}>Congelar (gratis)</button>}
+            {p.status === 'confirmado' && !vencido && !freezing && <button className="linklike" onClick={() => setFreezing(true)}>Congelar</button>}
             {p.status !== 'cancelado' && <button className="linklike" style={{ color: 'var(--danger)' }} onClick={cancelBono}>Cancelar bono</button>}
           </div>
         </>
